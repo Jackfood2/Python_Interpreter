@@ -54,6 +54,8 @@ The application follows a structured, cyclical workflow for every task:
 *   **Vision-Based Verification:** Agents can take screenshots and use vision-enabled LLMs to understand the visual state of your desktop.
 *   **Human-in-the-Loop:** The system can pause and ask for your confirmation when it encounters ambiguity.
 *   **Persistent Cognitive Memory:** Utilizes ChromaDB to give agents a long-term memory, allowing them to learn and improve.
+*   **Global LLM ID Management:** Manage a global list of available LLM identifiers, select a default for all agents, and add/remove LLMs through a dedicated settings window.
+*   **Chat Mode:** Engage in direct conversations with a default LLM, bypassing the multi-agent orchestration for quick queries.
 
 ## The Agent's Toolbox
 
@@ -140,7 +142,7 @@ Before you can use the application, you need an API key from OpenRouter.
 Ensure you have Python 3.8 or newer installed and that your environment can install third-party packages.
 
 #### **Step 3: Install Dependencies**
-To install the required libraries, open your terminal or command prompt and execute the command listed for the **"Install Required Libraries"** action in the **Command Reference Table** below.
+To install the required libraries, open your terminal or command prompt and execute the command listed for the **"Install Required Libraries"** action in the **Command Reference Table** below. You will also need `python-dotenv` for managing API keys.
 
 #### **Step 4: Save the Script**
 Save the provided Python code into a file named `python_interpreter.py` in a dedicated folder.
@@ -149,14 +151,19 @@ Save the provided Python code into a file named `python_interpreter.py` in a ded
 To start the application, navigate to the folder containing your script in your terminal and execute the command listed for the **"Run the Application"** action in the **Command Reference Table**.
 
 #### **Step 6: Provide Your API Key (CRITICAL)**
-*   When you run the application for the first time, a dialog box will appear.
-*   **Paste your OpenRouter API Key from Step 1 into the input field and click "OK".**
+*   Create a new file named `.env` in the root directory of your project (where `python_interpreter.py` is located).
+*   Open the `.env` file and add your OpenRouter API key in the following format:
+    ```
+    OPENROUTER_API_KEY="your_api_key_here"
+    ```
+*   Replace `"your_api_key_here"` with the actual API key you obtained from OpenRouter in Step 1.
+*   **Ensure there are no spaces around the `=` sign.**
 
 ## Command Reference Table
 
 | Purpose / Action               | Command                                           |
 | ------------------------------ | ------------------------------------------------- |
-| **Install Required Libraries** | `pip install --upgrade pip && pip install tk chromadb requests Pillow` |
+| **Install Required Libraries** | `pip install --upgrade pip && pip install tk chromadb requests Pillow python-dotenv` |
 | **Run the Application**        | `python python_interpreter.py`                          |
 
 ## User Guide: Step-by-Step
@@ -164,7 +171,15 @@ To start the application, navigate to the folder containing your script in your 
 #### **Step 1: Launch and Configure**
 After completing the setup, launch the application. The main window will appear.
 
-#### **Step 2: Configure Your Agents (Crucial for Success)**
+#### **Step 2: Global LLM Settings and Execution Mode**
+In the reorganized controls section, you will find:
+*   **Global LLM ID Selection:** Use the dropdown menu to choose a global LLM ID. You can apply this to all agents, ensuring consistent model usage.
+*   **LLM Manager:** Access the new `LLMManagerDialog` from the settings to add or remove LLM IDs from your global list, stored in `llm_ids.json`.
+*   **Execution Mode:** Select either "Execute Task" (the default multi-agent orchestration) or "Chat".
+    *   **"Execute Task" Mode:** The system will proceed with agent selection, planning, and execution as described in the System Architecture. The "Execute Task" button will be visible.
+    *   **"Chat" Mode:** The system will bypass the multi-agent workflow and send your prompt directly to the default LLM. The "Execute Task" button will change to "Send Message" and the LLM's response will stream live into the main answer text box.
+
+#### **Step 3: Configure Your Agents (Crucial for Success)**
 The true power of this application is unlocked when you create and fine-tune agents. A well-crafted **System Prompt** is the single most important factor for an agent's success.
 
 ##### **Recommended Models**
@@ -194,14 +209,17 @@ Use these examples as a starting point for creating your own powerful custom age
 | **UI Automation Specialist**  | ```You are a meticulous UI Automation Specialist. Your purpose is to control the mouse and keyboard with extreme precision to interact with desktop applications. Your primary tool is `pyautogui_script`.<br><br>**CRITICAL INSTRUCTIONS:**<br>1. **Analyze First:** Before acting, analyze the last screenshot to determine the exact coordinates (x, y) for clicks or the sequence of key presses needed.<br>2. **Act Deliberately:** Your scripts must be simple and focused on a single action (e.g., one click, typing a single field).<br>3. **Incorporate Pauses:** Use `time.sleep()` with short durations (e.g., 0.5 to 1 second) between actions to allow the UI to respond.<br>4. **Be Cautious:** You have direct control of the user's system. Double-check your planned actions to prevent unintended consequences.``` |
 | **Core Agent: PLANNER**     | `You are a meticulous, reactive, and persistent AGI Planner. Your job is to devise the single best next step to achieve a goal, adapting your plan based on the outcome of the previous step...`<br>*(The full, detailed prompt is available in the Core Agents settings and explains the agent's philosophy on tool selection, UI automation best practices, and reactive planning with fallback strategies.)* |
 
-#### **Step 3: Define a Task and Execute**
-In the large text box, write a clear, detailed prompt. Click "Execute Task".
+#### **Step 4: Define a Task and Execute**
+In the large text box, write a clear, detailed prompt.
+*   If in "Execute Task" mode, click "Execute Task".
+*   If in "Chat" mode, click "Send Message".
 
-#### **Step 4: Monitor and Interact**
-Watch the "Execution Log" window. The application may pause and show a pop-up asking for "Human Verification" if it is uncertain. Your input is crucial for keeping the task on track.
+#### **Step 5: Monitor and Interact**
+*   **"Execute Task" Mode:** Watch the "Execution Log" window. The application may pause and show a pop-up asking for "Human Verification" if it is uncertain. Your input is crucial for keeping the task on track.
+*   **"Chat" Mode:** The LLM's response will stream directly into the main answer text box.
 
-#### **Step 5: Review the Final Result**
-When the task is complete, close the log window. The final answer will be in the "Final Answer" tab, and a detailed log will be available in the "Full Execution Log" tab.
+#### **Step 6: Review the Final Result**
+When the task is complete (or the chat response is fully streamed), close the log window (if in "Execute Task" mode). The final answer will be in the "Final Answer" tab, and a detailed log will be available in the "Full Execution Log" tab.
 
 ## The Cognitive Memory System
 
@@ -217,6 +235,7 @@ The application features a long-term memory to help agents learn from experience
 *   **Add New Agents:** Create new agents with specialized skills via the UI.
 *   **Modify Core Agents:** Advanced users can modify the core agent prompts via the `Settings` menu.
 *   **Integrate New Tools:** The application's code can be extended to include new tools for agents to use.
+*   **Global LLM Configuration:** Manage your list of available LLM IDs through the new LLM Manager settings, and easily apply a global LLM ID to all agents.
 
 ## File and Directory Structure
 
@@ -225,6 +244,7 @@ When first run, the application will create a `data` directory:
 *   `data/`
     *   `agents.json`: Stores your custom agent configurations.
     *   `core_agents_config.json`: Stores the core agent prompts.
+    *   `llm_ids.json`: Stores the list of available LLM identifiers for global management.
     *   `memory/`: Contains all cognitive memory data.
         *   `chroma_db/`: The persistent database for procedural and semantic memory.
         *   `episodes/`: JSON files logging each completed task.
