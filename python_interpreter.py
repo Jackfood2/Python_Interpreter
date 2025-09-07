@@ -1,5 +1,7 @@
 import base64
 import ctypes
+import contextlib
+import traceback
 import io
 import json
 import os
@@ -26,7 +28,7 @@ from PIL import Image, ImageGrab, ImageTk
 # --- Global Configuration ---
 # Note: Storing API keys directly in code is not recommended for production.
 # Consider using environment variables or a secure configuration file.
-OPENROUTER_API_KEY = "skxxxxx"
+OPENROUTER_API_KEY = "skxxxxxxxxxxxxxxxxxxxxxx"
 API_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_API_ENDPOINT = f"{API_BASE_URL}/chat/completions"  # Changed from API_ENDPOINT
 HTTP_REFERER = "http://localhost"
@@ -244,6 +246,11 @@ class CognitiveArchitect:
                 self.log_callback(f"[CognitiveArchitect] Could not find JSON in reflection response.", "warning")
                 return
             reflections = json.loads(match.group(0))
+            if reflections.get("procedures") or reflections.get("facts"):
+                self.log_callback(f"\n[CognitiveArchitect] Generated the following memories for storage:", "info")
+                # Pretty-print the JSON to make it readable in the log
+                pretty_reflections = json.dumps(reflections, indent=2)
+                self.log_callback(pretty_reflections, "output") # Use 'output' tag for monospaced font
             for proc in reflections.get("procedures", []): self.memory.add_procedure(proc['description'], proc['steps'], episode_id)
             for fact in reflections.get("facts", []): self.memory.add_fact(fact, episode_id)
             self.log_callback("[CognitiveArchitect] Reflection complete.", "info")
@@ -476,27 +483,88 @@ class Agent:
     def execute_step(self, step_data):
         description, step_type, command = step_data.get("description", "N/A"), step_data.get("type"), step_data.get("command", "")
         self.log(f"Executing: {description}", "info")
+
+        # --- In-Process Execution for Standard Python Scripts ---
+        if step_type == "python_script":
+            self.log("[Execution] Running script in-process...", "info")
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            return_code = 0
+            
+            try:
+                # Redirect stdout and stderr to capture all output
+                with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+                    # Use a restricted globals dict for a little extra safety
+                    restricted_globals = {"__builtins__": __builtins__}
+                    exec(command, restricted_globals)
+            except Exception:
+                # If any error occurs, capture the full traceback
+                # and set a non-zero exit code.
+                stderr_buffer.write(traceback.format_exc())
+                return_code = 1
+            finally:
+                # Get the captured output
+                stdout = stdout_buffer.getvalue()
+                stderr = stderr_buffer.getvalue()
+                stdout_buffer.close()
+                stderr_buffer.close()
+
+            return {"stdout": stdout, "stderr": stderr, "code": return_code}
+
+        # --- Subprocess Execution for Shell Commands and UI Automation ---
         flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
         try:
             if step_type in ["cmd", "powershell"]:
                 is_shell = True if step_type == "cmd" else False
                 cmd_list = ['powershell.exe', '-NoProfile', '-Command', command] if step_type == "powershell" else command
-                proc = subprocess.run(cmd_list, shell=is_shell, capture_output=True, text=True, encoding='utf-8', errors='ignore', check=False, creationflags=flags)
-                return {"stdout": proc.stdout, "stderr": proc.stderr, "code": proc.returncode}
-            elif step_type in ["python_script", "pyautogui_script"]:
+                
+                # Use Popen and communicate() to prevent I/O deadlocks
+                proc = subprocess.Popen(
+                    cmd_list, 
+                    shell=is_shell, 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE, 
+                    text=True, 
+                    encoding='utf-8', 
+                    errors='ignore', 
+                    creationflags=flags
+                )
+                
+                try:
+                    # communicate() safely reads output and waits for process to end
+                    stdout, stderr = proc.communicate(timeout=300) # 5-minute timeout
+                    return_code = proc.returncode
+                except subprocess.TimeoutExpired:
+                    # If the command genuinely hangs, kill it and report an error
+                    proc.kill()
+                    # Try to get any output it produced before being killed
+                    stdout, stderr = proc.communicate()
+                    stderr += "\n[Execution Error] Command timed out after 5 minutes and was terminated."
+                    return_code = 1 # A non-zero code indicates failure
+
+                return {"stdout": stdout, "stderr": stderr, "code": return_code}
+            
+            # PyAutoGUI scripts still run in a separate process
+            elif step_type == "pyautogui_script":
                 script_path = self.temp_scripts_dir / f"agent_script_{int(time.time())}.py"
                 script_path.write_text(command.replace('\\n', '\n'), encoding='utf-8')
                 proc = subprocess.Popen([sys.executable, str(script_path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore', creationflags=flags)
                 self.active_subprocesses.append(proc)
                 try:
-                    stdout, stderr = proc.communicate(timeout=300) # 5-minute timeout for scripts
+                    stdout, stderr = proc.communicate(timeout=300)
                     return {"stdout": stdout, "stderr": stderr, "code": proc.returncode}
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     self.log("Script execution timed out after 5 minutes and was terminated.", "error")
                     return {"stdout": "", "stderr": "TimeoutExpired: The script took too long to execute.", "code": 1}
                 finally:
+                    if proc.poll() is None:
+                        try:
+                            proc.kill()
+                            proc.wait(timeout=5)
+                        except (ProcessLookupError, subprocess.TimeoutExpired): pass
                     if proc in self.active_subprocesses: self.active_subprocesses.remove(proc)
+
             elif step_type == "screenshot":
                 self.log_callback("HIDE_WINDOWS_FOR_SCREENSHOT", "system_command")
                 time.sleep(1.5)
@@ -504,11 +572,16 @@ class Agent:
                 self.log_callback("SHOW_WINDOWS_AFTER_SCREENSHOT", "system_command")
                 self.log(screenshot, "image_display")
                 return {"stdout": f"Screenshot taken. Reason: {command}", "stderr": "", "code": 0}
+
             elif step_type == "browser":
                 webbrowser.open(command)
                 return {"stdout": f"Opened URL: {command}", "stderr": "", "code": 0}
-            else: return {"stdout": "", "stderr": f"Unknown step type '{step_type}'", "code": 1}
-        except Exception as e: return {"stdout": "", "stderr": f"Critical execution error: {str(e)}", "code": 1}
+            
+            else: 
+                return {"stdout": "", "stderr": f"Unknown step type '{step_type}'", "code": 1}
+
+        except Exception as e:
+            return {"stdout": "", "stderr": f"Critical execution error: {str(e)}", "code": 1}
 
     def run(self, prompt, cancel_event, provider):
         self.user_prompt = prompt
@@ -537,11 +610,43 @@ class Agent:
                 return {"success": True, "output": final_answer, "history": history}
     
             exec_result = self.execute_step(plan.get("step", {}))
-            self.log(f"[OUTPUT]\n{(exec_result.get('stdout', '') or '')}\n{(exec_result.get('stderr', '') or '')}".strip(), "output")
+
+            # --- NEW: Improved Output Logging ---
+            stdout = exec_result.get('stdout', '').strip()
+            stderr = exec_result.get('stderr', '').strip()
+
+            if stdout or stderr:
+                self.log("--- PROCESS OUTPUT ---", "output")
+                if stdout:
+                    # Log standard output
+                    self.log(stdout, "output")
+                if stderr:
+                    # Log standard error with a distinct error tag
+                    self.log(f"[STDERR]:\n{stderr}", "error")
+                self.log("--- END OUTPUT ---", "output")
+            else:
+                # If there's no output, confirm that it ran silently.
+                self.log("[OUTPUT] Command produced no output.", "info")
+            # --- END of NEW BLOCK ---
     
             if exec_result["code"] != 0:
                 last_outcome = {"status": "FAILED", "reasoning": f"Execution failed with code {exec_result['code']}.", "output": exec_result}
+    
+            if exec_result["code"] != 0 or stderr:
+                # Construct a more detailed reason for the failure.
+                reasoning = ""
+                if exec_result["code"] != 0:
+                    reasoning += f"Execution failed with a non-zero exit code ({exec_result['code']}).\n"
+                if stderr:
+                    reasoning += f"The command produced the following error output:\n{stderr}"
+
+                last_outcome = {
+                    "status": "FAILED",
+                    "reasoning": reasoning.strip(),
+                    "output": exec_result
+                }
                 history.append({"step": plan.get("step"), "outcome": last_outcome})
+                # This 'continue' is crucial - it forces the agent to stop and replan.
                 continue
     
             if plan.get("is_conclusive"):
@@ -616,6 +721,21 @@ class AgentManager:
         return query_llm(messages, config.get("llm_id"), self.log_callback, self.cancel_event, provider, max_tokens=max_tokens) or "Synthesizer failed."
 
     def execute_task(self, prompt, num_agents_to_activate, max_tokens, provider):
+        """
+        Public method called by the GUI. Starts the entire task in a background thread
+        to keep the GUI responsive.
+        """
+        # The GUI now calls this method, which immediately returns after starting the thread.
+        threading.Thread(
+            target=self._execute_task_thread, 
+            args=(prompt, num_agents_to_activate, max_tokens, provider), 
+            daemon=True
+        ).start()
+
+    def _execute_task_thread(self, prompt, num_agents_to_activate, max_tokens, provider):
+        """
+        The actual task execution logic, running in a background thread.
+        """
         self.cancel_event.clear()
         self.cleanup_processes()
         self.log("\n[Manager] Starting new task...", "header")
@@ -625,48 +745,40 @@ class AgentManager:
             self.log("[Manager] No suitable agents were selected. Aborting.", "error")
             self.on_finish_callback({"final_answer": "Task aborted: No suitable agents found."})
             return
-    
+
         self.log(f"\n[Manager] Activating: {[a.name for a in active_agents]}", "success")
         agent_outputs, threads = {}, []
-        def run_agent_and_store(agent): 
-            agent_outputs[agent.name] = agent.run(prompt, self.cancel_event, provider)
+        def run_agent_and_store(agent): agent_outputs[agent.name] = agent.run(prompt, self.cancel_event, provider)
         
         for agent in active_agents:
-            thread = threading.Thread(target=run_agent_and_store, args=(agent,))
-            threads.append(thread)
-            thread.start()
-        
-        for thread in threads: 
-            thread.join()
-    
+            thread = threading.Thread(target=run_agent_and_store, args=(agent,)); threads.append(thread); thread.start()
+        for thread in threads: thread.join()
+
         self.cleanup_processes()
         
         if self.cancel_event.is_set():
             self.on_finish_callback({"final_answer": "Task was cancelled by the user."})
             return
-    
-        # Process transcript and memory BEFORE synthesis
+
         transcript = [h for res in agent_outputs.values() for h in res.get('history', [])]
         if transcript:
+            self.log("\n[Manager] Saving episode and starting cognitive reflection in background...", "info")
             episode_id = self.memory_manager.save_episode(prompt, transcript)
-            # Run reflection in a separate thread but don't wait for it
+            # Reflection is still in its own daemon thread, which is fine.
             threading.Thread(target=self.architect.reflect_on_episode, args=(prompt, transcript, episode_id, provider), daemon=True).start()
-    
-        # Perform synthesis while the log window is still open
+
         if all(result.get('success') for result in agent_outputs.values()):
             self.log("\n[Manager] All agents succeeded.", "success")
             if len(agent_outputs) == 1:
                 final_answer = next(iter(agent_outputs.values())).get('output', "Task complete.")
             else:
-                # Synthesis happens here, while log window is open
+                self.log("\n[Manager] Multiple agents succeeded. Synthesizing results...", "info")
                 final_answer = self.synthesize_results(prompt, agent_outputs, max_tokens, provider)
         else:
             self.log("\n[Manager] One or more agents failed.", "warning")
             final_answer = "One or more agents failed. Review the log for details."
-    
+
         self.log(f"\n{'=' * 25} TASK COMPLETE {'=' * 25}", "header")
-        
-        # Only NOW call the finish callback
         self.on_finish_callback({"final_answer": final_answer})
 
     def execute_task(self, prompt, num_agents_to_activate, max_tokens, provider):
