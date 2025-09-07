@@ -28,7 +28,7 @@ from PIL import Image, ImageGrab, ImageTk
 # --- Global Configuration ---
 # Note: Storing API keys directly in code is not recommended for production.
 # Consider using environment variables or a secure configuration file.
-OPENROUTER_API_KEY = "skxxxxxxxxxxxxxxxxxxxxxx"
+OPENROUTER_API_KEY = "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"
 API_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_API_ENDPOINT = f"{API_BASE_URL}/chat/completions"  # Changed from API_ENDPOINT
 HTTP_REFERER = "http://localhost"
@@ -84,6 +84,7 @@ You have full autonomy to select the most logical and efficient tool for each st
 *   **Direct UI Control (`pyautogui_script`):** For direct and complete control of the user interface (mouse and keyboard). Use this to automate any desktop application, perform actions in web browsers that Selenium cannot reliably handle, type text, press keys (`enter`, `tab`), and execute hotkeys (`ctrl+s`). This tool acts as your hands.
 *   **Visual Analysis (`screenshot`):** To capture the screen's current state. Use this when you need to "see" the screen to understand the context, verify an outcome, locate an element for a future `pyautogui_script` step, or debug a failed UI interaction.
 *   **Simple Web Navigation (`browser`):** For simply opening a URL in the user's default browser. Use this *only* when you need to navigate to a page without requiring any further automated interaction on that page.
+*   **Ask for User Input (`ask_user`):** When you are blocked, have ambiguous instructions, or need confirmation, use this tool. The "command" should be the specific question you need to ask the user. For example, if a file is not found, ask "The file 'X' was not found. Did you mean a different file or location?". The user's response will be provided in the 'last_outcome' for your next step.
 
 **Tool Selection Philosophy:**
 - **Prioritize `direct_answer`:** If the user's request can be fulfilled with a text response, use `direct_answer`. Only use other tools when system interaction is required.
@@ -131,7 +132,7 @@ RESPONSE FORMAT: Respond ONLY with a single, valid JSON object.
 {
     "thought": "Your detailed reasoning. First, I will analyze the last action's outcome. Based on that success/failure, I will devise the next step. If Selenium failed, I will explain my fallback strategy (e.g., trying a new selector or switching to pyautogui with estimated coordinates).",
     "step": {
-        "description": "A clear, concise description of this single action.",
+        "description": "find at least two ways to present clear, concise description of this single action by running script to check. For file/dir operations, be specific (e.g., \"Create file 'C:\\temp\\report.txt'\" or \"Delete directory '%TEMP%\\old_files'\").",
         "type": "cmd | powershell | python_script | browser | pyautogui_script",
         "command": "The exact and complete command to execute."
     },
@@ -265,16 +266,78 @@ class StepVerifier:
         self.core_agents_config = core_agents_config
         self.question_queue = question_queue
         self.answer_queue = answer_queue
-        self.provider = provider # --- Store the provider
+        self.provider = provider
 
     def log(self, message, tag=None): self.log_callback(message, tag)
 
+    def _extract_path_from_command(self, description, command):
+        """Extracts a file path from the command or description using regex."""
+        # Priority 1: Look for explicit paths in quotes from the description
+        match = re.search(r'([\'"])(?P<path>(?:[a-zA-Z]:\\|\.\.|\.|%[a-zA-Z_]+%\\)[^\'"]+?)\1', description, re.IGNORECASE)
+        if match:
+            return os.path.expandvars(match.group('path'))
+
+        # Priority 2: Look for paths being constructed or used in Python/shell commands
+        # Catches os.path.join('...', 'file.txt'), Path(...) / 'file.txt', and "C:\... a.txt"
+        path_patterns = [
+            r"os\.path\.join\([^,]+,\s*['\"](.*?)['\"]\)",  # os.path.join(..., 'file.txt')
+            r"Path\([^)]+\)\s*/\s*['\"](.*?)['\"]",          # Path(...) / 'file.txt'
+            r"['\"]((?:[a-zA-Z]:\\|\\|\./|\.\./|%[a-zA-Z_]+%\\).*?\.\w{2,5})['\"]" # "C:\path\to\file.txt"
+        ]
+        for pattern in path_patterns:
+            match = re.search(pattern, command)
+            if match:
+                # Expand variables like %USERPROFILE%
+                return os.path.expandvars(match.group(1).replace('\\\\', '\\'))
+        return None
+
+    def _verify_with_code(self, step_description, command):
+        """
+        Attempts to programmatically verify file/directory operations by parsing the command
+        and checking the filesystem directly. This is the most reliable verification method.
+        """
+        self.log("[Verifier] Attempting programmatic verification...", "info")
+        path_str = self._extract_path_from_command(step_description, command)
+        
+        if not path_str:
+            self.log("[Verifier] Could not extract a verifiable path from the command.", "info")
+            return None # Fallback to LLM
+
+        path = Path(path_str)
+        
+        # Check for Deletion
+        del_match = re.search(r'\b(delete|remove|erase|del|rm)\b', step_description, re.IGNORECASE)
+        if del_match:
+            if not path.exists():
+                reason = f"Evidence-based check: Path '{path}' successfully deleted (it no longer exists)."
+                self.log(f"[Verifier] Programmatic result: PASSED. {reason}", "success")
+                return {"status": "PASSED", "reasoning": reason}
+            else:
+                reason = f"Evidence-based check: Path '{path}' still exists. Deletion FAILED."
+                self.log(f"[Verifier] Programmatic result: FAILED. {reason}", "error")
+                return {"status": "FAILED", "reasoning": reason}
+
+        # Check for Creation/Modification
+        create_match = re.search(r'\b(create|make|generate|write to|save|download|touch|echo >|mkdir)\b', step_description, re.IGNORECASE)
+        if create_match:
+            if path.exists():
+                reason = f"Evidence-based check: Path '{path}' now exists, confirming creation/modification."
+                self.log(f"[Verifier] Programmatic result: PASSED. {reason}", "success")
+                return {"status": "PASSED", "reasoning": reason}
+            else:
+                reason = f"Evidence-based check: Path '{path}' does not exist. Creation/modification FAILED."
+                self.log(f"[Verifier] Programmatic result: FAILED. {reason}", "error")
+                return {"status": "FAILED", "reasoning": reason}
+
+        self.log("[Verifier] No applicable programmatic check found for this step.", "info")
+        return None
+
     def _verify_with_text(self, step_description, command_output, cancel_event):
+        # This method is now a fallback and remains unchanged.
         self.log("[Verifier] Attempting text-based verification...", "info")
         config = self.core_agents_config.get("VERIFIER", {})
         prompt = f'**Goal:** "{self.user_prompt}"\n**Action:** "{step_description}"\n**Output:**\n{json.dumps(command_output)}'
         messages = [{"role": "system", "content": config.get("prompt")}, {"role": "user", "content": prompt}]
-        # --- FIX: Pass self.provider to the LLM query ---
         response = query_llm(messages, config.get("llm_id"), self.log_callback, cancel_event, self.provider)
         if not response: return None
         try:
@@ -290,37 +353,30 @@ class StepVerifier:
             return None
 
     def _verify_with_vision(self, step_description, cancel_event):
+        # Unchanged
         self.log("[Verifier] Falling back to vision-based verification.", "info")
         questions = self._generate_verification_questions(step_description, cancel_event)
         if not questions: return {"status": "UNCERTAIN", "reasoning": "Could not generate verification questions."}
-
         self.log_callback("HIDE_WINDOWS_FOR_SCREENSHOT", "system_command")
         time.sleep(1.5)
-
         if cancel_event.is_set():
             self.log_callback("SHOW_WINDOWS_AFTER_SCREENSHOT", "system_command")
             return {"status": "FAILED", "reasoning": "Task cancelled during verification."}
-
         screenshot = ImageGrab.grab()
         self.log_callback("SHOW_WINDOWS_AFTER_SCREENSHOT", "system_command")
         self.log(screenshot, "image_display")
-
         buffered = io.BytesIO()
         screenshot.save(buffered, format="JPEG"); img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
         del screenshot, buffered
-
         vision_prompt = f'Based on the image, answer each question with only "yes", "no", or "uncertain".\nQuestions:\n{json.dumps(questions, indent=2)}\nRespond ONLY with a JSON object like: {{"answers": ["yes", "no"]}}'
         config = self.core_agents_config.get("IMAGE_DESCRIBER", {})
         response_text = query_vision_llm(vision_prompt, img_base64, config.get("llm_id"), self.log_callback, cancel_event, self.provider)
         if not response_text: return {"status": "FAILED", "reasoning": "Vision model failed to respond."}
-
         try:
             match = re.search(r'{.*}', response_text, re.DOTALL)
             answers = json.loads(match.group(0)).get("answers", []) if match else []
         except (json.JSONDecodeError, AttributeError): answers = []
-
         if len(answers) != len(questions): return {"status": "UNCERTAIN", "reasoning": "Vision model returned malformed answers."}
-
         final_reasoning = "[Vision-based] Q&A:\n"
         for q, a in zip(questions, answers):
             answer_str = str(a).lower().strip()
@@ -333,10 +389,10 @@ class StepVerifier:
         return {"status": "PASSED", "reasoning": final_reasoning}
 
     def _generate_verification_questions(self, step_description, cancel_event):
+        # Unchanged
         config = self.core_agents_config.get("QUESTION_FORMULATOR", {})
         prompt = f'Goal: "{self.user_prompt}"\nAction: "{step_description}"'
         messages = [{"role": "system", "content": config.get("prompt")}, {"role": "user", "content": prompt}]
-        # --- FIX: Pass self.provider to the LLM query ---
         response = query_llm(messages, config.get("llm_id"), self.log_callback, cancel_event, self.provider)
         if not response: return []
         try:
@@ -345,15 +401,25 @@ class StepVerifier:
         except (json.JSONDecodeError, AttributeError): return []
 
     def _request_human_verification(self, question):
+        # Unchanged
         self.log(f"[Verifier] Asking user for help: '{question}'", "warning")
         self.question_queue.put(question)
         while self.answer_queue.empty(): time.sleep(0.2)
         return self.answer_queue.get()
 
-    def verify_step_outcome(self, step_description, command_output, cancel_event):
+    def verify_step_outcome(self, step_description, command, command_output, cancel_event):
+        # --- UPDATED: Prioritize Code Verification ---
+        code_result = self._verify_with_code(step_description, command)
+        if code_result:
+            return code_result # Trust the programmatic check
+
+        # If code check wasn't possible, fall back to LLM
+        self.log("[Verifier] Falling back to LLM-based verification.", "info")
         text_result = self._verify_with_text(step_description, command_output, cancel_event)
         if text_result and text_result.get('status') in ['PASSED', 'FAILED']:
             return text_result
+        
+        # Finally, fall back to vision if the text-based check was uncertain.
         return self._verify_with_vision(step_description, cancel_event)
 
 def query_llm(messages, model_id, log_callback, cancel_event, provider, max_tokens=10000):
@@ -443,8 +509,8 @@ def query_vision_llm(prompt, base64_image, model_id, log_callback, cancel_event,
     return None
 
 class Agent:
-    """Represents an autonomous agent that can plan and execute steps to achieve a goal."""
-    def __init__(self, name, description, llm_id, system_prompt, log_callback, config_manager, memory_manager, question_queue, answer_queue, subprocess_list):
+    def __init__(self, root, name, description, llm_id, system_prompt, log_callback, config_manager, memory_manager, question_queue, answer_queue, subprocess_list, input_request_queue, input_response_queue):
+        self.root = root 
         self.name, self.description, self.llm_id, self.system_prompt = name, description, llm_id, system_prompt
         self.log_callback, self.config_manager, self.memory_manager = log_callback, config_manager, memory_manager
         self.core_agents_config = config_manager.load_core_agents_config()
@@ -452,8 +518,27 @@ class Agent:
         self.temp_scripts_dir.mkdir(exist_ok=True)
         self.user_prompt, self.question_queue, self.answer_queue = None, question_queue, answer_queue
         self.active_subprocesses = subprocess_list
+        self.input_request_queue = input_request_queue
+        self.input_response_queue = input_response_queue
 
     def log(self, message, tag=None): self.log_callback(f"[{self.name}] {message}", tag)
+    
+    # --- NEW HELPER METHOD ---
+    # This method runs in a separate thread to read a stream (like stdout)
+    # and puts the lines into a queue without blocking the main thread.
+    def _stream_reader(self, pipe, output_queue, tag):
+        try:
+            # "iter(pipe.readline, '')" reads lines one by one from the stream
+            # until the stream is closed.
+            for line in iter(pipe.readline, ''):
+                if line:
+                    output_queue.put((tag, line))
+                else:
+                    break
+        finally:
+            # Ensure the pipe is closed when done
+            with contextlib.suppress(Exception):
+                pipe.close()
 
     def generate_next_step(self, prompt, history, last_outcome, cancel_event, provider):
         # Memory retrieval logic (unchanged)
@@ -480,91 +565,95 @@ class Agent:
             except json.JSONDecodeError as e: self.log(f"Failed to parse plan: {e}\nResponse: {response}", "error")
         return None
 
+    # --- MODIFIED METHOD ---
     def execute_step(self, step_data):
         description, step_type, command = step_data.get("description", "N/A"), step_data.get("type"), step_data.get("command", "")
         self.log(f"Executing: {description}", "info")
 
-        # --- In-Process Execution for Standard Python Scripts ---
-        if step_type == "python_script":
-            self.log("[Execution] Running script in-process...", "info")
-            stdout_buffer = io.StringIO()
-            stderr_buffer = io.StringIO()
-            return_code = 0
-            
-            try:
-                # Redirect stdout and stderr to capture all output
-                with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-                    # Use a restricted globals dict for a little extra safety
-                    restricted_globals = {"__builtins__": __builtins__}
-                    exec(command, restricted_globals)
-            except Exception:
-                # If any error occurs, capture the full traceback
-                # and set a non-zero exit code.
-                stderr_buffer.write(traceback.format_exc())
-                return_code = 1
-            finally:
-                # Get the captured output
-                stdout = stdout_buffer.getvalue()
-                stderr = stderr_buffer.getvalue()
-                stdout_buffer.close()
-                stderr_buffer.close()
-
-            return {"stdout": stdout, "stderr": stderr, "code": return_code}
-
-        # --- Subprocess Execution for Shell Commands and UI Automation ---
         flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        
         try:
-            if step_type in ["cmd", "powershell"]:
-                is_shell = True if step_type == "cmd" else False
-                cmd_list = ['powershell.exe', '-NoProfile', '-Command', command] if step_type == "powershell" else command
-                
-                # Use Popen and communicate() to prevent I/O deadlocks
+            if step_type in ["python_script", "pyautogui_script"]:
+                self.log(f"[Execution] Running {step_type} in external process for live output...", "info")
+                script_path = self.temp_scripts_dir / f"agent_script_{int(time.time())}.py"
+                script_content = command.replace('\\n', '\n')
+                script_path.write_text(script_content, encoding='utf-8')
+
                 proc = subprocess.Popen(
-                    cmd_list, 
-                    shell=is_shell, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE, 
-                    text=True, 
-                    encoding='utf-8', 
-                    errors='ignore', 
+                    [sys.executable, str(script_path)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding='utf-8',
+                    errors='ignore',
                     creationflags=flags
                 )
-                
-                try:
-                    # communicate() safely reads output and waits for process to end
-                    stdout, stderr = proc.communicate(timeout=300) # 5-minute timeout
-                    return_code = proc.returncode
-                except subprocess.TimeoutExpired:
-                    # If the command genuinely hangs, kill it and report an error
-                    proc.kill()
-                    # Try to get any output it produced before being killed
-                    stdout, stderr = proc.communicate()
-                    stderr += "\n[Execution Error] Command timed out after 5 minutes and was terminated."
-                    return_code = 1 # A non-zero code indicates failure
-
-                return {"stdout": stdout, "stderr": stderr, "code": return_code}
-            
-            # PyAutoGUI scripts still run in a separate process
-            elif step_type == "pyautogui_script":
-                script_path = self.temp_scripts_dir / f"agent_script_{int(time.time())}.py"
-                script_path.write_text(command.replace('\\n', '\n'), encoding='utf-8')
-                proc = subprocess.Popen([sys.executable, str(script_path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore', creationflags=flags)
                 self.active_subprocesses.append(proc)
+
+                # --- START: Real-time logging logic ---
+                output_queue = queue.Queue()
+                stdout_full, stderr_full = "", ""
+
+                # Start reader threads for stdout and stderr
+                stdout_thread = threading.Thread(target=self._stream_reader, args=(proc.stdout, output_queue, "stdout"))
+                stderr_thread = threading.Thread(target=self._stream_reader, args=(proc.stderr, output_queue, "stderr"))
+                stdout_thread.start()
+                stderr_thread.start()
+
+                # Main loop to check process status and read from the queue
+                while proc.poll() is None:
+                    try:
+                        # Get output from the queue without blocking
+                        tag, line = output_queue.get_nowait()
+                        if tag == "stdout":
+                            clean_line = line.strip()
+                            self.log(clean_line, "output")
+                            stdout_full += line
+                        else: # stderr
+                            clean_line = line.strip()
+                            self.log(f"[STDERR]: {clean_line}", "error")
+                            stderr_full += line
+                    except queue.Empty:
+                        # If the queue is empty, sleep briefly to prevent high CPU usage
+                        time.sleep(0.05)
+                
+                # Wait for reader threads to finish to ensure all output is captured
+                stdout_thread.join(timeout=1)
+                stderr_thread.join(timeout=1)
+
+                # Process any final items that might be left in the queue
+                while not output_queue.empty():
+                    tag, line = output_queue.get()
+                    if tag == "stdout":
+                        self.log(line.strip(), "output")
+                        stdout_full += line
+                    else:
+                        self.log(f"[STDERR]: {line.strip()}", "error")
+                        stderr_full += line
+                # --- END: Real-time logging logic ---
+
+                if proc in self.active_subprocesses: self.active_subprocesses.remove(proc)
+                try: os.remove(script_path)
+                except OSError as e: self.log(f"Warning: Could not remove temp script {script_path}. Reason: {e}", "warning")
+
+                return {"stdout": stdout_full, "stderr": stderr_full, "code": proc.returncode}
+
+            elif step_type in ["cmd", "powershell"]:
+                is_shell = True if step_type == "cmd" else False
+                cmd_list = ['powershell.exe', '-NoProfile', '-Command', command] if step_type == "powershell" else command
+                # Note: Real-time output for cmd/powershell is more complex and not implemented here
+                # as python_script is the primary method for long-running tasks.
+                proc = subprocess.Popen(cmd_list, shell=is_shell, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore', creationflags=flags)
                 try:
                     stdout, stderr = proc.communicate(timeout=300)
                     return {"stdout": stdout, "stderr": stderr, "code": proc.returncode}
                 except subprocess.TimeoutExpired:
                     proc.kill()
-                    self.log("Script execution timed out after 5 minutes and was terminated.", "error")
-                    return {"stdout": "", "stderr": "TimeoutExpired: The script took too long to execute.", "code": 1}
-                finally:
-                    if proc.poll() is None:
-                        try:
-                            proc.kill()
-                            proc.wait(timeout=5)
-                        except (ProcessLookupError, subprocess.TimeoutExpired): pass
-                    if proc in self.active_subprocesses: self.active_subprocesses.remove(proc)
+                    stdout, stderr = proc.communicate()
+                    stderr += "\n[Execution Error] Command timed out after 5 minutes and was terminated."
+                    return {"stdout": stdout, "stderr": stderr, "code": 1}
 
+            # --- (The rest of the execute_step method is unchanged) ---
             elif step_type == "screenshot":
                 self.log_callback("HIDE_WINDOWS_FOR_SCREENSHOT", "system_command")
                 time.sleep(1.5)
@@ -576,18 +665,25 @@ class Agent:
             elif step_type == "browser":
                 webbrowser.open(command)
                 return {"stdout": f"Opened URL: {command}", "stderr": "", "code": 0}
-            
-            else: 
-                return {"stdout": "", "stderr": f"Unknown step type '{step_type}'", "code": 1}
+
+            elif step_type == "ask_user":
+                self.log(f"Requesting user input: '{command}'", "warning")
+                self.input_request_queue.put(command)
+                user_response = self.input_response_queue.get()
+                if user_response is not None:
+                    self.log(f"User responded: '{user_response}'", "success")
+                    return {"stdout": f"User provided the following input: '{user_response}'", "stderr": "", "code": 0}
+                else: # The main thread will send None if the user cancels
+                    self.log("User cancelled the input dialog.", "error")
+                    return {"stdout": "", "stderr": "User cancelled or provided no input.", "code": 1}
 
         except Exception as e:
-            return {"stdout": "", "stderr": f"Critical execution error: {str(e)}", "code": 1}
+            return {"stdout": "", "stderr": f"Critical execution error: {str(e)}\n{traceback.format_exc()}", "code": 1}
 
     def run(self, prompt, cancel_event, provider):
         self.user_prompt = prompt
         history, last_outcome = [], None
         step_count, max_steps = 0, 15
-        # THIS IS THE KEY FIX: Pass 'provider' to the verifier's constructor
         verifier = StepVerifier(self.log_callback, prompt, self.core_agents_config, self.question_queue, self.answer_queue, provider)
     
         while step_count < max_steps:
@@ -596,7 +692,6 @@ class Agent:
             step_count += 1
             self.log(f"\n--- Step {step_count}/{max_steps} ---", "header")
     
-            # FIX #2: Pass 'provider' to the planner
             plan = self.generate_next_step(prompt, history, last_outcome, cancel_event, provider)
             if not plan or "step" not in plan:
                 last_outcome = {"status": "FAILED", "reasoning": "Planner failed to produce a valid plan."}
@@ -609,54 +704,47 @@ class Agent:
                 history.append({"step": plan.get("step"), "outcome": {"status": "PASSED", "reasoning": "Direct answer provided."}})
                 return {"success": True, "output": final_answer, "history": history}
     
-            exec_result = self.execute_step(plan.get("step", {}))
+            step_details = plan.get("step", {})
+            exec_result = self.execute_step(step_details)
 
-            # --- NEW: Improved Output Logging ---
             stdout = exec_result.get('stdout', '').strip()
             stderr = exec_result.get('stderr', '').strip()
 
             if stdout or stderr:
                 self.log("--- PROCESS OUTPUT ---", "output")
-                if stdout:
-                    # Log standard output
-                    self.log(stdout, "output")
-                if stderr:
-                    # Log standard error with a distinct error tag
-                    self.log(f"[STDERR]:\n{stderr}", "error")
+                if stdout: self.log(stdout, "output")
+                if stderr: self.log(f"[STDERR]:\n{stderr}", "error")
                 self.log("--- END OUTPUT ---", "output")
             else:
-                # If there's no output, confirm that it ran silently.
                 self.log("[OUTPUT] Command produced no output.", "info")
-            # --- END of NEW BLOCK ---
     
             if exec_result["code"] != 0:
                 last_outcome = {"status": "FAILED", "reasoning": f"Execution failed with code {exec_result['code']}.", "output": exec_result}
     
             if exec_result["code"] != 0 or stderr:
-                # Construct a more detailed reason for the failure.
-                reasoning = ""
-                if exec_result["code"] != 0:
-                    reasoning += f"Execution failed with a non-zero exit code ({exec_result['code']}).\n"
-                if stderr:
-                    reasoning += f"The command produced the following error output:\n{stderr}"
-
-                last_outcome = {
-                    "status": "FAILED",
-                    "reasoning": reasoning.strip(),
-                    "output": exec_result
-                }
-                history.append({"step": plan.get("step"), "outcome": last_outcome})
-                # This 'continue' is crucial - it forces the agent to stop and replan.
+                reasoning = f"Execution failed with a non-zero exit code ({exec_result['code']})." if exec_result["code"] != 0 else ""
+                if stderr: reasoning += f"\nThe command produced the following error output:\n{stderr}"
+                last_outcome = {"status": "FAILED", "reasoning": reasoning.strip(), "output": exec_result}
+                history.append({"step": step_details, "outcome": last_outcome})
                 continue
-    
-            if plan.get("is_conclusive"):
-                last_outcome = {"status": "PASSED", "reasoning": "Marked as conclusive by planner.", "output": exec_result}
-                history.append({"step": plan.get("step"), "outcome": last_outcome})
+
+            verification = verifier.verify_step_outcome(
+                step_details['description'], 
+                step_details['command'],
+                exec_result, 
+                cancel_event
+            )
+
+            last_outcome = { "status": verification.get("status", "FAILED"), "reasoning": verification.get("reasoning", "N/A"), "output": exec_result }
+            history.append({"step": step_details, "outcome": last_outcome})
+
+            if plan.get("is_conclusive") and last_outcome["status"] == "PASSED":
+                self.log("Planner marked step as conclusive and verifier confirmed success. Ending task.", "success")
                 break
-    
-            verification = verifier.verify_step_outcome(plan['step']['description'], exec_result, cancel_event)
-            last_outcome = {"status": verification.get("status", "FAILED"), "reasoning": verification.get("reasoning", "N/A"), "output": exec_result}
-            history.append({"step": plan.get("step"), "outcome": last_outcome})
+            
+            if last_outcome["status"] != "PASSED":
+                self.log(f"Step did not pass verification (Status: {last_outcome['status']}). Rethinking next step.", "warning")
+                continue
     
         final_result = history[-1] if history else {}
         is_success = final_result.get("outcome", {}).get("status") == "PASSED"
@@ -665,23 +753,44 @@ class Agent:
         return {"success": is_success, "output": json.dumps(final_result, indent=2), "history": history}
 
 class AgentManager:
-    """Manages the lifecycle of agents, including selection, execution, and synthesis."""
-    def __init__(self, log_callback, on_finish_callback, question_queue, answer_queue):
+    def __init__(self, root, log_callback, on_finish_callback, question_queue, answer_queue, input_request_queue, input_response_queue):
+        self.root = root
         self.log_callback = log_callback
         self.on_finish_callback = on_finish_callback
+        self.question_queue = question_queue
+        self.answer_queue = answer_queue
+        self.input_request_queue = input_request_queue
+        self.input_response_queue = input_response_queue
+        
         self.config_manager = ConfigManager()
         self.memory_manager = MemoryManager(log_callback)
         self.architect = CognitiveArchitect(self.memory_manager, log_callback, self.config_manager.load_core_agents_config().get("ARCHITECT", {}))
         self.cancel_event = threading.Event()
         self.active_subprocesses = []
-        self.reload_agents(question_queue, answer_queue)
+        self.reload_agents()
 
-    def log(self, message, tag=None): self.log_callback(message, tag)
+    def log(self, message, tag=None):
+        """A dedicated log method for the AgentManager."""
+        self.log_callback(message, tag)
 
-    def reload_agents(self, question_queue, answer_queue):
+    def reload_agents(self):
         self.user_agents_data = self.config_manager.load_user_agents()
         self.core_agents_config = self.config_manager.load_core_agents_config()
-        self.agents = [Agent(a['name'], a['description'], a.get('llm_id'), a.get('system_prompt', ''), self.log_callback, self.config_manager, self.memory_manager, question_queue, answer_queue, self.active_subprocesses) for a in self.user_agents_data]
+        self.agents = [Agent(
+            self.root, 
+            a['name'], 
+            a['description'], 
+            a.get('llm_id'), 
+            a.get('system_prompt', ''), 
+            self.log_callback, 
+            self.config_manager, 
+            self.memory_manager, 
+            self.question_queue, 
+            self.answer_queue, 
+            self.active_subprocesses, 
+            self.input_request_queue, 
+            self.input_response_queue) 
+            for a in self.user_agents_data]
         self.log("Agents and configurations reloaded.", "info")
 
     def cleanup_processes(self):
@@ -694,7 +803,6 @@ class AgentManager:
         self.active_subprocesses.clear()
 
     def select_agents(self, prompt, num_to_select, max_tokens, provider):
-        # This logic is sound and remains unchanged.
         self.log(f"\n[Router] Selecting the best {num_to_select} agent(s)...", "header")
         if not self.agents: return []
         agent_list = "\n".join([f"- {a.name}: {a.description}" for a in self.agents])
@@ -717,7 +825,6 @@ class AgentManager:
         config = self.core_agents_config.get("SYNTHESIZER", {})
         user_prompt = f'Original Prompt: "{prompt}"\nAgent Outputs:\n{inputs}'
         messages = [{"role": "system", "content": config.get("prompt")}, {"role": "user", "content": user_prompt}]
-        # --- FIX: Pass the provider argument ---
         return query_llm(messages, config.get("llm_id"), self.log_callback, self.cancel_event, provider, max_tokens=max_tokens) or "Synthesizer failed."
 
     def execute_task(self, prompt, num_agents_to_activate, max_tokens, provider):
@@ -725,7 +832,6 @@ class AgentManager:
         Public method called by the GUI. Starts the entire task in a background thread
         to keep the GUI responsive.
         """
-        # The GUI now calls this method, which immediately returns after starting the thread.
         threading.Thread(
             target=self._execute_task_thread, 
             args=(prompt, num_agents_to_activate, max_tokens, provider), 
@@ -764,7 +870,6 @@ class AgentManager:
         if transcript:
             self.log("\n[Manager] Saving episode and starting cognitive reflection in background...", "info")
             episode_id = self.memory_manager.save_episode(prompt, transcript)
-            # Reflection is still in its own daemon thread, which is fine.
             threading.Thread(target=self.architect.reflect_on_episode, args=(prompt, transcript, episode_id, provider), daemon=True).start()
 
         if all(result.get('success') for result in agent_outputs.values()):
@@ -774,46 +879,6 @@ class AgentManager:
             else:
                 self.log("\n[Manager] Multiple agents succeeded. Synthesizing results...", "info")
                 final_answer = self.synthesize_results(prompt, agent_outputs, max_tokens, provider)
-        else:
-            self.log("\n[Manager] One or more agents failed.", "warning")
-            final_answer = "One or more agents failed. Review the log for details."
-
-        self.log(f"\n{'=' * 25} TASK COMPLETE {'=' * 25}", "header")
-        self.on_finish_callback({"final_answer": final_answer})
-
-    def execute_task(self, prompt, num_agents_to_activate, max_tokens, provider):
-        self.cancel_event.clear()
-        self.cleanup_processes()
-        self.log("\n[Manager] Starting new task...", "header")
-        
-        active_agents = self.select_agents(prompt, num_agents_to_activate, max_tokens, provider)
-        if not active_agents:
-            self.log("[Manager] No suitable agents were selected. Aborting.", "error")
-            self.on_finish_callback({"final_answer": "Task aborted: No suitable agents found."})
-            return
-
-        self.log(f"\n[Manager] Activating: {[a.name for a in active_agents]}", "success")
-        agent_outputs, threads = {}, []
-        def run_agent_and_store(agent): agent_outputs[agent.name] = agent.run(prompt, self.cancel_event, provider)
-        
-        for agent in active_agents:
-            thread = threading.Thread(target=run_agent_and_store, args=(agent,)); threads.append(thread); thread.start()
-        for thread in threads: thread.join()
-
-        self.cleanup_processes()
-        
-        if self.cancel_event.is_set():
-            self.on_finish_callback({"final_answer": "Task was cancelled by the user."})
-            return
-
-        transcript = [h for res in agent_outputs.values() for h in res.get('history', [])]
-        if transcript:
-            episode_id = self.memory_manager.save_episode(prompt, transcript)
-            threading.Thread(target=self.architect.reflect_on_episode, args=(prompt, transcript, episode_id, provider), daemon=True).start()
-
-        if all(result.get('success') for result in agent_outputs.values()):
-            self.log("\n[Manager] All agents succeeded.", "success")
-            final_answer = next(iter(agent_outputs.values())).get('output', "Task complete.") if len(agent_outputs) == 1 else self.synthesize_results(prompt, agent_outputs, max_tokens, provider)
         else:
             self.log("\n[Manager] One or more agents failed.", "warning")
             final_answer = "One or more agents failed. Review the log for details."
@@ -903,7 +968,17 @@ class TaskExecutorGUI:
         self.log_queue = queue.Queue()
         self.question_queue = queue.Queue()
         self.answer_queue = queue.Queue()
-        self.agent_manager = AgentManager(self.log_to_gui, self.on_task_finish, self.question_queue, self.answer_queue)
+        self.input_request_queue = queue.Queue()
+        self.input_response_queue = queue.Queue()
+        self.agent_manager = AgentManager(
+            self.root, 
+            self.log_to_gui, 
+            self.on_task_finish, 
+            self.question_queue, 
+            self.answer_queue,
+            self.input_request_queue,
+            self.input_response_queue
+        )
         self.provider_var = tk.StringVar(value="openrouter")
 
         self.create_widgets()
@@ -1075,48 +1150,69 @@ class TaskExecutorGUI:
 
     def process_log_queue(self):
         try:
-            while not self.log_queue.empty():
-                item, tag = self.log_queue.get_nowait()
-                self.full_task_log.append((item, tag))
+            widget_to_update = None
+            if self.execution_log_window and self.execution_log_window.winfo_exists():
+                widget_to_update = self.execution_log_window.log_text
+
+            if not self.log_queue.empty() and widget_to_update:
+                widget_to_update.config(state=NORMAL)
+                # Process all items currently in the queue in one go
+                while not self.log_queue.empty():
+                    item, tag = self.log_queue.get_nowait()
+                    self.full_task_log.append((item, tag))
+                    
+                    if tag == "system_command":
+                        if item == "HIDE_WINDOWS_FOR_SCREENSHOT": 
+                            self.hide_windows_for_screenshot()
+                        elif item == "SHOW_WINDOWS_AFTER_SCREENSHOT": 
+                            self.show_windows_after_screenshot()
+                        continue
+                    self.log_item_to_widget(widget_to_update, item, tag)
                 
-                if tag == "system_command":
-                    if item == "HIDE_WINDOWS_FOR_SCREENSHOT": 
-                        self.hide_windows_for_screenshot()
-                    elif item == "SHOW_WINDOWS_AFTER_SCREENSHOT": 
-                        self.show_windows_after_screenshot()
-                    continue
-    
-                # Log to execution window if it exists and is valid
-                if self.execution_log_window and self.execution_log_window.winfo_exists():
-                    self.log_item_to_widget(self.execution_log_window.log_text, item, tag)
-    
+                widget_to_update.see(END) # Scroll to the end once per batch
+                widget_to_update.config(state=DISABLED)
+
             while not self.question_queue.empty():
                 question = self.question_queue.get_nowait()
                 parent = self.execution_log_window or self.root
                 parent.lift()
                 self.answer_queue.put(messagebox.askyesno("Human Verification Needed", question, parent=parent))
+
+            while not self.input_request_queue.empty():
+                question = self.input_request_queue.get_nowait()
+                parent_window = self.execution_log_window or self.root
+                parent_window.lift()
+                user_response = simpledialog.askstring("Agent Needs Your Input", question, parent=parent_window)
+                self.input_response_queue.put(user_response)
+
         finally:
             self.root.after(100, self.process_log_queue)
 
     def log_item_to_widget(self, widget, item, tag):
+        # This method now assumes the widget is already in a NORMAL state.
         try:
-            widget.config(state=NORMAL)
             if isinstance(item, str):
-                if tag and tag.startswith("llm_stream"):
-                    widget.insert(END, item, ("llm_stream",)); 
-                    if tag == "llm_stream_end": widget.insert(END, '\n')
-                else: widget.insert(END, item + "\n", (tag,) if tag else ())
+                # A more robust check for any stream-related tag
+                if tag and "llm_stream" in tag:
+                    widget.insert(END, item, ("llm_stream",))
+                    if tag == "llm_stream_end":
+                        widget.insert(END, '\n')
+                else:
+                    widget.insert(END, item + "\n", (tag,) if tag else ())
             elif isinstance(item, Image.Image):
                 max_width = widget.winfo_width() - 40 if widget.winfo_width() > 40 else 600
-                w, h = item.size; new_w = min(w, max_width); new_h = int(new_w * (h / w))
+                w, h = item.size
+                new_w = min(w, max_width)
+                new_h = int(new_w * (h / w))
                 photo = ImageTk.PhotoImage(item.resize((new_w, new_h), Image.Resampling.LANCZOS))
                 self.log_photo_images.append(photo) # Keep reference
-                widget.image_create(END, image=photo, padx=10, pady=10); widget.insert(END, '\n\n')
-                if len(self.log_photo_images) > 20: self.log_photo_images = self.log_photo_images[-10:]
-            widget.see(END)
-        except Exception as e: print(f"Error logging to GUI: {e}")
-        finally:
-            if widget.winfo_exists(): widget.config(state=DISABLED)
+                widget.image_create(END, image=photo, padx=10, pady=10)
+                widget.insert(END, '\n\n')
+                if len(self.log_photo_images) > 20:
+                    self.log_photo_images = self.log_photo_images[-10:]
+        except Exception as e:
+            # Print to console for debugging GUI errors
+            print(f"Error logging to GUI widget: {e}")
     
     def log_to_gui(self, item, tag=None): self.log_queue.put((item, tag))
 
@@ -1137,7 +1233,7 @@ class TaskExecutorGUI:
     def populate_agent_list(self):
         # Unchanged from previous version
         self.agent_listbox.delete(0, END)
-        self.agent_manager.reload_agents(self.question_queue, self.answer_queue)
+        self.agent_manager.reload_agents()
         agents = self.agent_manager.user_agents_data
         for agent in agents: self.agent_listbox.insert(END, agent['name'])
         max_agents = len(agents) if agents else 0
