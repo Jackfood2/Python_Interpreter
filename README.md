@@ -99,30 +99,24 @@ Here is a step-by-step breakdown of the process for our example task.
 
 1.  **User Input**
     *   The system receives the task: find out top 5 AI news and save in txt on desktop
-    *   ➡️
 
 2.  **Query Memory**
     *   The full prompt is vectorized and sent to the ChromaDB memory system.
-    *   ➡️
 
 3.  **Search & Retrieve**
     *   The system performs a similarity search across its two memory types to find relevant procedures and facts.
-    *   ➡️
 
 4.  **Construct Context**
     *   The top matching memories are gathered and formatted into a text block to be passed to the Planner.
-    *   ➡️
 
 5.  **Build Planner Prompt**
     *   A large prompt is assembled for the Planner LLM, containing:
         1.  Retrieved Memories (Context)
         2.  Original User Goal
         3.  Task History (empty for the first step)
-    *   ➡️
 
 6.  **LLM Planning**
     *   The complete prompt is sent to the Planner LLM, which uses the retrieved memories to generate an informed and efficient first step.
-    *   ➡️
 
 7.  **Execute Step**
     *   The system executes the generated step (e.g., runs a Python script to search for news).
@@ -177,6 +171,8 @@ The true power of this application is unlocked when you create and fine-tune age
 This application has been tested and performs exceptionally well with the following OpenRouter LLM IDs. When creating or editing agents, we highly recommend using one of these:
 *   `openrouter/sonoma-dusk-alpha`
 *   `openrouter/sonoma-sky-alpha`
+*   `deepseek/deepseek-chat-v3.1:free`
+*   `openai/gpt-oss-120b:free`
 
 These models are notable for their massive **2 million token context windows**. This makes them excellent for complex, multi-step tasks because they can remember the entire history of actions, outputs, and verifications, leading to much better decision-making by the **Planner** agent.
 
