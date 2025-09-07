@@ -85,7 +85,7 @@ Ensure you have Python 3.8 or newer installed and that your environment can inst
 To install the required libraries, open your terminal or command prompt and execute the command listed for the **"Install Required Libraries"** action in the **Command Reference Table** below.
 
 #### **Step 4: Save the Script**
-Save the provided Python code into a file named `orchestrator.py` in a dedicated folder.
+Save the provided Python code into a file named `python_interpreter.py` in a dedicated folder.
 
 #### **Step 5: Run the Application**
 To start the application, navigate to the folder containing your script in your terminal and execute the command listed for the **"Run the Application"** action in the **Command Reference Table**.
