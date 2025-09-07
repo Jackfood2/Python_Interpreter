@@ -66,6 +66,70 @@ The application follows a structured, cyclical workflow for every task:
 | `screenshot`         | Captures the current screen content. This is the agent's "eyes," used for visual analysis.                |
 | `browser`            | A simple tool to open a specific URL in the user's default web browser.                                 |
 
+# Agentic Workflow: Memory-Driven Task Execution
+
+This document outlines how our AI agent system leverages its cognitive memory to efficiently plan and execute tasks. We will use a concrete example to illustrate the entire workflow from user request to task completion.
+
+### The Example Task
+
+The user provides the following prompt:
+find out top 5 AI news and save in txt on desktop
+
+---
+
+## How Memory is Retrieved
+
+Before the agent takes any action, it first consults its memory. This allows the system to learn from past experiences and approach new tasks more intelligently. The core concepts of this retrieval process are detailed below.
+
+| Concept                      | Description                                                                                                                                                                                                                                                                                                                                                             |
+| :--------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Vector Database for Memory** | The system uses `ChromaDB`, a vector database, to store and retrieve memories. This allows it to find relevant information based on *conceptual similarity*, not just exact keyword matches.                                                                                                                                                                             |
+| **Two Core Memory Types**    | The memory is divided into two distinct types: <br> - **🧠 Procedural Memory**: Stores successful, multi-step action plans from past tasks. For our example, it might find a procedure like "How to search the web for information and save results to a file". <br> - **💡 Semantic Memory**: Stores individual, useful facts. For example, it might recall `os.path.expanduser('~/Desktop')` returns the user's desktop path. |
+| **Querying Process**         | The user's entire prompt is converted into a numerical vector. This vector is then used as a search query against both procedural and semantic memory collections to find the most similar and relevant stored memories.                                                                                                                                               |
+| **Informing the Planner**    | The most relevant procedures and facts are retrieved and injected directly into the prompt that is sent to the **Planner Agent**. This context is provided under a clear heading, such as `## Relevant Knowledge from Memory:`.                                                                                                                                         |
+| **Making an Informed Decision**  | By receiving this context upfront, the Planner Agent gets a significant head-start. It doesn't have to figure everything out from scratch and can immediately formulate a more efficient plan based on strategies that have worked in the past.                                                                                                                           |
+
+---
+
+## Simple Workflow Diagram
+
+Here is a step-by-step breakdown of the process for our example task.
+
+**[START]**
+
+1.  **User Input**
+    *   The system receives the task: find out top 5 AI news and save in txt on desktop
+    *   ➡️
+
+2.  **Query Memory**
+    *   The full prompt is vectorized and sent to the ChromaDB memory system.
+    *   ➡️
+
+3.  **Search & Retrieve**
+    *   The system performs a similarity search across its two memory types to find relevant procedures and facts.
+    *   ➡️
+
+4.  **Construct Context**
+    *   The top matching memories are gathered and formatted into a text block to be passed to the Planner.
+    *   ➡️
+
+5.  **Build Planner Prompt**
+    *   A large prompt is assembled for the Planner LLM, containing:
+        1.  Retrieved Memories (Context)
+        2.  Original User Goal
+        3.  Task History (empty for the first step)
+    *   ➡️
+
+6.  **LLM Planning**
+    *   The complete prompt is sent to the Planner LLM, which uses the retrieved memories to generate an informed and efficient first step.
+    *   ➡️
+
+7.  **Execute Step**
+    *   The system executes the generated step (e.g., runs a Python script to search for news).
+
+**[PROCESS REPEATS UNTIL TASK IS COMPLETE]**
+
+
 ## Installation and Setup
 
 Follow these steps precisely to get the application running.
