@@ -99,7 +99,7 @@ To start the application, navigate to the folder containing your script in your 
 | Purpose / Action               | Command                                           |
 | ------------------------------ | ------------------------------------------------- |
 | **Install Required Libraries** | `pip install --upgrade pip && pip install tk chromadb requests Pillow` |
-| **Run the Application**        | `python orchestrator.py`                          |
+| **Run the Application**        | `python python_interpreter.py`                          |
 
 ## User Guide: Step-by-Step
 
