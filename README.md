@@ -98,15 +98,43 @@ This table contains all the necessary commands for installing dependencies and r
 
 ## User Guide: Step-by-Step
 
-1.  **Launch the Application:** After completing the setup, launch the application using the relevant command from the table above.
-2.  **Explore the UI:**
-    *   **Left Panel (Agent Management):** View, add, edit, and remove your custom agents.
-    *   **Bottom Panel (Task Input):** Write your commands for the agents here.
-    *   **Controls (Bottom Right):** Configure the LLM provider, number of active agents, and token limits.
-3.  **Define a Task:** In the large text box, write a clear, detailed prompt. Example: "Research the main features of the Python `asyncio` library and write a summary into a file named `asyncio_summary.md` on my desktop."
-4.  **Execute the Task:** Click the "Execute Task" button.
-5.  **Monitor the Execution Log:** A new window will pop up, showing a live feed of the agents' activities. The application may pause and show a pop-up asking for "Human Verification" if it is uncertain about a step's success.
-6.  **Review the Final Result:** When the task is complete, close the log window to return to the main application screen. The final answer will be in the "Final Answer" tab, and a detailed log will be available in the "Full Execution Log" tab.
+#### **Step 1: Launch the Application**
+After completing the setup, launch the application using the relevant command from the table above.
+
+#### **Step 2: Explore the UI**
+*   **Left Panel (Agent Management):** View your list of custom agents.
+*   **Bottom Panel (Task Input):** Write your commands for the agents here.
+*   **Controls (Bottom Right):** Configure the LLM provider, number of active agents, and token limits.
+
+#### **Step 3: Configure Your Agents (Crucial for Success)**
+The default agents are only examples. The true power of this application is unlocked when you create and fine-tune agents for your specific needs. **A well-crafted system prompt is the single most important factor for an agent's success.**
+
+**How to Edit Agents:**
+1.  In the left panel, either click "Add" to create a new agent or select an existing agent and click "Edit".
+2.  Fill out the fields:
+    *   **Agent Name:** A short, descriptive name (e.g., `CodeWriter`, `WebResearcher`).
+    *   **Agent Description:** A sentence describing its skills. This is what the **Router** uses to select the agent.
+    *   **LLM ID:** The model from OpenRouter you want this agent to use (e.g., `openrouter/sonoma-sky-alpha`).
+    *   **System Prompt:** The detailed instructions for the agent (see the table below for high-quality examples).
+
+#### **Sample System Prompts Table**
+
+Use these examples as a starting point for creating your own powerful agents.
+
+| Agent Specialization        | Sample System Prompt                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| :-------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Python Developer**        | ```You are an expert Python developer with a specialization in scripting and automation.<br>Your primary goal is to write clean, efficient, and well-documented Python code to solve the user's request.<br><br>**Core Instructions:**<br>1. **Code Quality:** Always produce high-quality, readable Python code adhering to PEP 8 standards.<br>2. **Use Standard Libraries:** Prefer Python's built-in libraries whenever possible to ensure maximum compatibility.<br>3. **Comments:** Include comments to explain complex or non-obvious parts of your code.<br>4. **Error Handling:** Incorporate basic error handling (e.g., try-except blocks).<br>5. **Output:** Use `print()` statements to provide status updates on the script's progress.``` |
+| **Web Research Specialist** | ```You are a world-class research assistant. Your mission is to find the most accurate, relevant, and up-to-date information to answer the user's query.<br><br>**Your Process:**<br>1. **Deconstruct:** Break down the user's request into key search terms and questions.<br>2. **Search:** Use available tools to search for information. Prioritize reputable sources like official documentation, academic papers, and established news organizations.<br>3. **Synthesize:** Do not just copy-paste information. Understand the material from multiple sources and synthesize it into a concise, easy-to-understand summary.<br>4. **Clarity:** Present your final answer in a clear and structured format. Use headings, lists, and bold text.<br>5. **Be Objective:** Stick to the facts found in your research.``` |
+| **UI Automation Specialist**  | ```You are a meticulous UI Automation Specialist. Your purpose is to control the mouse and keyboard with extreme precision to interact with desktop applications. Your primary tool is `pyautogui_script`.<br><br>**CRITICAL INSTRUCTIONS:**<br>1. **Analyze First:** Before acting, analyze the last screenshot to determine the exact coordinates (x, y) for clicks or the sequence of key presses needed.<br>2. **Act Deliberately:** Your scripts must be simple and focused on a single action (e.g., one click, typing a single field).<br>3. **Incorporate Pauses:** Use `time.sleep()` with short durations (e.g., 0.5 to 1 second) between actions to allow the UI to respond.<br>4. **Be Cautious:** You have direct control of the user's system. Double-check your planned actions to prevent unintended consequences.``` |
+
+#### **Step 4: Define a Task and Execute**
+In the large text box, write a clear, detailed prompt. Click "Execute Task".
+
+#### **Step 5: Monitor and Interact**
+Watch the "Execution Log" window. The application may pause and show a pop-up asking for "Human Verification" if it is uncertain about a step's success. Your input is crucial for keeping the task on track.
+
+#### **Step 6: Review the Final Result**
+When the task is complete, close the log window to return to the main application screen. The final answer will be in the "Final Answer" tab, and a detailed log will be available in the "Full Execution Log" tab.
 
 ## The Cognitive Memory System
 
@@ -137,4 +165,4 @@ When first run, the application will create a `data` directory with the followin
 ## Important Notes and Disclaimers
 
 *   **Security:** This application gives AI agents the ability to execute code and control your computer. Only run tasks from trusted sources and be aware of the commands being executed. The user is responsible for the actions taken by the agents.
-*   **API Costs:** Using the OpenRouter API will incur costs based on your usage of their models. Monitor your usage and set spending limits on your OpenRouter account.
+*   **API Costs:** Using the OpenRouter API will incur costs based on your usage of their models. Monitor your usage and set spending limits on your Open
