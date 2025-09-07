@@ -28,7 +28,7 @@ from PIL import Image, ImageGrab, ImageTk
 # --- Global Configuration ---
 # Note: Storing API keys directly in code is not recommended for production.
 # Consider using environment variables or a secure configuration file.
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = "skxxxxxxxxxxxxxxxxxxxxxxx"
 API_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_API_ENDPOINT = f"{API_BASE_URL}/chat/completions"  # Changed from API_ENDPOINT
 HTTP_REFERER = "http://localhost"
@@ -1509,3 +1509,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = TaskExecutorGUI(root)
     root.mainloop()
+
