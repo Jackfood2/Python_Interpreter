@@ -1,207 +1,140 @@
-```markdown
-# AGI-like Orchestrator: Multi-Agent Task Automation System
+# Multi-Agent Orchestrator
 
-**AGI-like Orchestrator** is an advanced, locally-run desktop application that simulates an Artificial General Intelligence (AGI) by orchestrating a team of specialized AI agents. These agents can plan, execute, and verify complex, multi-step tasks on your computer by interacting with the operating system, writing and running code, controlling the mouse and keyboard, browsing the web, and analyzing screenshots. The system learns from its experiences, building a long-term memory of procedures and facts to improve future performance.
-
-Built with Python and Tkinter, it provides a user-friendly graphical interface for defining tasks and monitoring agent activity in real-time.
-
----
+An advanced framework for orchestrating autonomous AI agents to collaboratively solve complex tasks. This application provides a graphical user interface to define, manage, and deploy a team of agents that can reason, plan, and execute actions on your computer.
 
 ## Table of Contents
-1.  [Key Features](#key-features)
-2.  [System Architecture](#system-architecture)
-3.  [Core Agents](#core-agents)
-4.  [User Agents](#user-agents)
-5.  [Memory System](#memory-system)
-6.  **Getting Started**
-    *   [Prerequisites](#prerequisites)
-    *   [Installation](#installation)
-    *   [Configuration](#configuration)
-7.  [Usage Guide](#usage-guide)
-8.  [LLM Providers](#llm-providers)
-9.  [Advanced Features & Settings](#advanced-features--settings)
-10. [Troubleshooting](#troubleshooting)
-11. [Important Notes & Limitations](#important-notes--limitations)
-12. [License](#license)
+1.  [Overview](#overview)
+2.  [Core Concepts](#core-concepts)
+3.  [System Architecture](#system-architecture)
+4.  [Key Features](#key-features)
+5.  [The Agent's Toolbox](#the-agents-toolbox)
+6.  [Installation and Setup](#installation-and-setup)
+7.  [Command Reference Table](#command-reference-table)
+8.  [User Guide: Step-by-Step](#user-guide-step-by-step)
+9.  [The Cognitive Memory System](#the-cognitive-memory-system)
+10. [Customization and Extensibility](#customization-and-extensibility)
+11. [File and Directory Structure](#file-and-directory-structure)
+12. [Important Notes and Disclaimers](#important-notes-and-disclaimers)
 
 ---
 
-## Key Features
+## Overview
 
-*   **Multi-Agent Collaboration:** Define and manage a team of specialized AI agents (e.g., Python Developer, Web Researcher) to tackle complex problems.
-*   **Autonomous Task Execution:** Agents can break down your high-level goal into executable steps, including running shell commands, executing Python scripts, and automating GUI interactions via `pyautogui`.
-*   **Self-Verification & Recovery:** The system doesn't just execute; it verifies if each step was successful using text analysis, computer vision (screenshot analysis), and can even ask the user for help. It can recover from failures by retrying with different methods.
-*   **Persistent Memory:** Learns and stores reusable procedures and factual knowledge from past successes, making it smarter over time.
-*   **Flexible LLM Backend:** Supports both cloud-based (OpenRouter) and local (LM Studio) Large Language Models for maximum flexibility and privacy.
-*   **Real-Time Logging:** A dedicated window streams the agents' thoughts, actions, and outputs as they work.
-*   **Extensible Design:** Easily add, edit, or remove agents and modify the core system's behavior through intuitive GUI settings.
+The Multi-Agent Orchestrator is more than just a chatbot; it's a dynamic problem-solving environment. It takes a high-level goal from a user and leverages a team of specialized AI agents to achieve it. These agents can write code, run commands, control your mouse and keyboard, analyze what's on the screen, and learn from their experiences to become more effective over time.
 
----
+This application is ideal for automating complex digital workflows, performing advanced research, and exploring the capabilities of autonomous AI systems in a controlled environment.
+
+## Core Concepts
+
+*   **Orchestration:** Instead of a single AI model trying to do everything, this application acts as an orchestrator or "project manager." It intelligently selects the right agent for each part of a task.
+*   **Autonomy:** Agents have the autonomy to create and adapt their own plans. The **Planner** agent is designed to be reactive, meaning it adjusts its strategy based on the success or failure of the previous step.
+*   **Verification:** A critical part of autonomy is verification. The system doesn't just assume an action worked. The **Verifier** agent actively checks the outcome of each step, using command-line output, visual analysis of the screen, or even by asking the user for help.
+*   **Cognitive Memory:** The system is designed to learn. Successful task executions are analyzed by the **Cognitive Architect**, which extracts reusable procedures and valuable facts. This knowledge is stored in a long-term memory database (ChromaDB) to improve future performance.
 
 ## System Architecture
 
-The application follows a modular, agent-based architecture:
+The application follows a structured, cyclical workflow for every task:
 
-1.  **User Interface (GUI):** The `TaskExecutorGUI` class handles all user interactions, input, and output display.
-2.  **Agent Manager:** The `AgentManager` acts as the conductor. It selects the most suitable agents for a task, manages their execution (often in parallel threads), and synthesizes their results.
-3.  **Agents:** The `Agent` class is the workhorse. Each agent instance uses an LLM to generate a step-by-step plan based on the goal, its own expertise, and retrieved memories. It then executes these steps.
-4.  **Core Cognitive Agents:** Specialized agents handle critical system functions:
-    *   **Router:** Selects which user agents are best for the task.
-    *   **Planner:** Generates the next executable step for a user agent.
-    *   **Verifier:** Determines if a step succeeded or failed.
-    *   **Synthesizer:** Combines outputs from multiple agents into a final answer.
-    *   **Cognitive Architect:** Reflects on completed tasks to extract and store new knowledge.
-5.  **Memory Manager:** Uses ChromaDB for vector storage to manage three types of memory: Episodic (past task logs), Procedural (learned step-by-step guides), and Semantic (learned facts).
-6.  **LLM Interface:** The `query_llm` and `query_vision_llm` functions handle communication with the chosen LLM provider (OpenRouter or LM Studio).
+1.  **User Input:** The process begins when the user provides a high-level goal (e.g., "Find the current price of Bitcoin and save it to a file on my desktop named btc_price.txt").
+2.  **Agent Selection (The Router):** The **Router** agent analyzes the user's goal and consults the list of available custom agents. It selects the agent(s) whose skills and descriptions are most relevant to the task.
+3.  **Planning (The Planner):** The selected agent's **Planner** persona takes over. It formulates the single best *next step* to make progress.
+4.  **Execution (The Executor):** The planned step is executed using the appropriate tool from the agent's toolbox.
+5.  **Verification (The Verifier):** The outcome of the execution is rigorously checked through text analysis, visual analysis, or by asking the user for help.
+6.  **Loop and Adapt:** The verified outcome is fed back to the **Planner**, which then devises the next logical step or a recovery action.
+7.  **Synthesis (The Synthesizer):** Once the goal is achieved, the **Synthesizer** agent reviews the entire process to create a single, comprehensive final answer.
+8.  **Reflection (The Cognitive Architect):** After the task is complete, the **Cognitive Architect** reflects on the successful steps and distills new knowledge, storing it in the long-term memory.
 
----
+## Key Features
 
-## Core Agents
+*   **Graphical User Interface:** An intuitive UI built with Tkinter for managing agents, executing tasks, and reviewing results.
+*   **Custom Agent Creation:** Easily add, edit, and remove your own specialized agents with unique skills, models, and system prompts.
+*   **Multi-Provider LLM Support:** Connect to OpenRouter for a wide variety of models or run models locally via LM Studio.
+*   **Real-time Execution Log:** A dedicated window streams every thought, action, command output, and verification result as it happens.
+*   **Advanced UI Automation:** Agents can directly control the mouse and keyboard to interact with any application on your desktop.
+*   **Vision-Based Verification:** Agents can take screenshots and use vision-enabled LLMs to understand the visual state of your desktop.
+*   **Human-in-the-Loop:** The system can pause and ask for your confirmation when it encounters ambiguity.
+*   **Persistent Cognitive Memory:** Utilizes ChromaDB to give agents a long-term memory, allowing them to learn and improve over time.
 
-These are the internal agents that power the system's intelligence. Their prompts and LLM IDs can be configured in the "Settings" menu.
+## The Agent's Toolbox
 
-*   **`ROUTER`**: Selects the best user agents for the given task.
-*   **`PLANNER`**: The most complex agent. It generates the next single step for a user agent, choosing from tools like `python_script`, `pyautogui_script`, `cmd`, `powershell`, `browser`, or `screenshot`. It is designed to be reactive, adapting its plan based on the outcome of the previous step and employing fallback strategies (e.g., switching from Selenium to PyAutoGUI if a web element can't be found).
-*   **`VERIFIER`**: Analyzes the output of an executed step to determine if it was a success, failure, or uncertain. Triggers visual verification if needed.
-*   **`QUESTION_FORMULATOR`**: Generates simple yes/no questions for the Verifier to use when analyzing a screenshot.
-*   **`IMAGE_DESCRIBER`**: A vision-capable LLM that answers the Verifier's questions based on a screenshot.
-*   **`SYNTHESIZER`**: Combines the results from multiple user agents into a coherent final response for the user.
-*   **`ARCHITECT`**: (Planned) Analyzes completed tasks to extract and store new procedures and facts into long-term memory.
+| Tool                 | Description                                                                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `direct_answer`      | For tasks that only require a text response, like summarization or answering a direct question.                                           |
+| `cmd` / `powershell` | Provides direct access to the operating system's command line.                                                                           |
+| `python_script`      | The most powerful tool for complex logic, data processing, web scraping, and API interactions.                                           |
+| `pyautogui_script`   | Grants direct control over the mouse and keyboard. Used for automating applications that don't have APIs. Acts as the agent's "hands."   |
+| `screenshot`         | Captures the current screen content. This is the agent's "eyes," used for visual analysis.                                                |
+| `browser`            | A simple tool to open a specific URL in the user's default web browser.                                                                    |
 
----
+## Installation and Setup
 
-## User Agents
+Follow these steps precisely to get the application running.
 
-These are the customizable agents you interact with directly. You can create, edit, and delete them via the GUI. Each user agent has:
-*   A **Name** (e.g., "PythonAgent").
-*   A **Description** defining its expertise (used by the Router).
-*   An **LLM ID** specifying which model it uses.
-*   A **System Prompt** that guides its overall behavior and planning style.
+#### **Step 1: Prerequisites**
+Ensure you have Python 3.8 or newer installed. The application also requires several third-party Python libraries to function correctly.
 
-The application comes with two default user agents:
-*   **PythonAgent**: Expert in writing and executing Python scripts for automation and data processing.
-*   **ResearchAgent**: Skilled at using the browser to find information.
+#### **Step 2: Install Dependencies**
+To install these required libraries, open your terminal or command prompt and execute the command listed for the **"Install Required Libraries"** action in the **Command Reference Table** below.
 
----
+#### **Step 3: Save the Script**
+Save the provided Python code into a file named `orchestrator.py`. Place it in a dedicated folder for this project.
 
-## Memory System
+#### **Step 4: Run the Application**
+To start the application, navigate to the folder containing your script in your terminal and execute the command listed for the **"Run the Application"** action in the **Command Reference Table**.
 
-The system learns and retains knowledge in three ways:
+#### **Step 5: Provide Your API Key (CRITICAL)**
+*   When you run the application for the first time, a dialog box will appear.
+*   **You must provide a valid OpenRouter API Key to proceed.**
+*   Paste your key into the input field and click "OK".
 
-1.  **Episodic Memory:** A complete log (stored as JSON files) of every step taken and its outcome for each task. This is like the system's diary.
-2.  **Procedural Memory:** (Via `CognitiveArchitect`) Stores successful sequences of commands as reusable "procedures." For example, if an agent successfully automates a complex file backup, this sequence can be recalled and reused for a similar future task.
-3.  **Semantic Memory:** (Via `CognitiveArchitect`) Stores discrete pieces of learned factual information.
+## Command Reference Table
 
-This memory is persistent across application restarts and can be viewed or cleared via the "Cognitive Memory" viewer in the Settings menu.
+This table contains all the necessary commands for installing dependencies and running the application. Copy and paste them into your terminal or command prompt.
 
----
+| Purpose / Action               | Command                                           |
+| ------------------------------ | ------------------------------------------------- |
+| **Install Required Libraries** | `pip install --upgrade pip && pip install tk chromadb requests Pillow` |
+| **Run the Application**        | `python orchestrator.py`                          |
 
-## Getting Started
+## User Guide: Step-by-Step
 
-### Prerequisites
+1.  **Launch the Application:** After completing the setup, launch the application using the relevant command from the table above.
+2.  **Explore the UI:**
+    *   **Left Panel (Agent Management):** View, add, edit, and remove your custom agents.
+    *   **Bottom Panel (Task Input):** Write your commands for the agents here.
+    *   **Controls (Bottom Right):** Configure the LLM provider, number of active agents, and token limits.
+3.  **Define a Task:** In the large text box, write a clear, detailed prompt. Example: "Research the main features of the Python `asyncio` library and write a summary into a file named `asyncio_summary.md` on my desktop."
+4.  **Execute the Task:** Click the "Execute Task" button.
+5.  **Monitor the Execution Log:** A new window will pop up, showing a live feed of the agents' activities. The application may pause and show a pop-up asking for "Human Verification" if it is uncertain about a step's success.
+6.  **Review the Final Result:** When the task is complete, close the log window to return to the main application screen. The final answer will be in the "Final Answer" tab, and a detailed log will be available in the "Full Execution Log" tab.
 
-*   **Python 3.8+**: Ensure Python is installed on your system.
-*   **Required Python Packages**: Install the dependencies listed in the next section.
-*   **(Optional) LM Studio**: If you want to use local models, download and install [LM Studio](https://lmstudio.ai/). You will need to load a compatible model (e.g., `nvidia/nvidia-nemotron-nano-9b-v2`) and ensure its server is running on `http://127.0.0.1:1234`.
-*   **(Optional) OpenRouter API Key**: If you want to use cloud models, sign up at [OpenRouter.ai](https://openrouter.ai/) and obtain an API key.
+## The Cognitive Memory System
 
-### Installation
+The application features a long-term memory to help agents learn from experience.
 
-1.  **Clone or Download:** Get the source code by cloning the repository or downloading the files.
-2.  **Install Dependencies:** Open a terminal in the project directory and run:
-    ```bash
-    pip install -r requirements.txt
-    ```
-    *If a `requirements.txt` file is not provided, install the packages listed in the imports:*
-    ```bash
-    pip install chromadb requests pillow tk pyautogui selenium webbrowser
-    ```
-3.  **Configure API Key (For OpenRouter):** Open the `main.py` file (or the file containing the code) and locate the `OPENROUTER_API_KEY` variable near the top. Replace `"skxxxxx"` with your actual OpenRouter API key.
-    ```python
-    OPENROUTER_API_KEY = "your_actual_api_key_here"
-    ```
+*   **Episodic Memory:** A detailed record of every action and outcome from completed tasks.
+*   **Procedural Memory:** Reusable, successful sequences of steps extracted from episodic memory. This is like a "skill" the agent learns.
+*   **Semantic Memory:** A collection of discrete facts and pieces of information learned during tasks.
+*   **Viewing Memory:** You can inspect the contents of the agent's memory by navigating to the `Settings > Cognitive Memory` menu item.
 
-### Configuration
+## Customization and Extensibility
 
-*   **LLM Provider:** Choose between "OpenRouter" (cloud) and "LM Studio" (local) in the bottom-right panel of the main GUI before running a task.
-*   **Core Agents:** Fine-tune the system's behavior by editing the prompts for the Router, Planner, Verifier, etc., via `Settings > Core Agents`.
-*   **User Agents:** Add, edit, or remove agents via the "Agent Management" panel on the left side of the GUI.
+*   **Add New Agents:** The easiest way to customize the system is by creating new agents with specialized skills via the UI.
+*   **Modify Core Agents:** Advanced users can modify the prompts and behavior of the core agents by editing the `data/core_agents_config.json` file.
+*   **Integrate New Tools:** The application's code can be extended to include new tools for agents to use.
 
----
+## File and Directory Structure
 
-## Usage Guide
+When first run, the application will create a `data` directory with the following structure:
 
-1.  **Launch the Application:** Run the script with `python main.py`.
-2.  **(Optional) Configure Agents:** Use the left panel to manage your team of User Agents.
-3.  **Enter Your Task:** Type your high-level goal or question into the large text box at the bottom of the window. For example:
-    *   "Create a Python script that lists all `.txt` files in my Documents folder and saves the list to `file_report.txt`."
-    *   "Research the latest advancements in solar panel efficiency and summarize them for me."
-    *   "Open Notepad, type 'Hello, World!', and save it as `test.txt` on my desktop."
-4.  **Select Settings:**
-    *   Choose your **LLM Provider** (OpenRouter or LM Studio).
-    *   Set the number of **Active Agents** (usually 1 is sufficient for most tasks).
-    *   Adjust the **Max Tokens** slider if needed (default is usually fine).
-5.  **Execute:** Click the "Execute Task" button.
-6.  **Monitor Execution:** A new "Execution Log" window will pop up, showing the agents' real-time thoughts, commands, outputs, and screenshots. You can minimize but not close this window while the task is running.
-7.  **Human Verification (If Needed):** If the system is uncertain about a step's outcome, a dialog box will appear asking you a simple yes/no question based on a screenshot. Your answer helps it proceed.
-8.  **View Results:** When the task is complete, the "Execution Log" window's "Stop Task" button changes to "Close". The final answer will appear in the "Final Answer" tab of the main window. You can also review the complete, formatted log in the "Full Execution Log" tab.
-9.  **Stop a Task:** If a task is taking too long or behaving unexpectedly, click the "Stop Task" button in the Execution Log window.
+*   `data/`
+    *   `agents.json`: Stores the configurations for all your custom agents.
+    *   `core_agents_config.json`: Contains the advanced settings and prompts for the core agents (Planner, Verifier, etc.).
+    *   `memory/`: The directory containing all cognitive memory data.
+        *   `chroma_db/`: The persistent database for procedural and semantic memory.
+        *   `episodes/`: JSON files logging each completed task.
 
----
+## Important Notes and Disclaimers
 
-## LLM Providers
-
-The system can route requests to two different backends:
-
-*   **OpenRouter (Default):**
-    *   **Pros:** Access to a wide variety of powerful, state-of-the-art models. No local hardware requirements.
-    *   **Cons:** Requires an internet connection and an API key. Usage may incur costs.
-    *   **Setup:** Add your API key to the `OPENROUTER_API_KEY` variable in the code.
-
-*   **LM Studio:**
-    *   **Pros:** Runs entirely locally, ensuring privacy and no API costs. Works offline.
-    *   **Cons:** Requires a powerful local machine (especially GPU) to run models effectively. Model quality may be lower than top-tier cloud models.
-    *   **Setup:** Install LM Studio, download and load a model, and ensure its local server is running. The application is pre-configured to connect to `http://127.0.0.1:1234/v1`.
-
-You can select the provider for each task via the radio buttons in the GUI.
-
----
-
-## Advanced Features & Settings
-
-*   **Core Agent Configuration:** Accessible via `Settings > Core Agents`, this allows you to modify the "brains" of the system. You can change the LLM used by each core agent and, more importantly, edit their system prompts to alter their decision-making logic. *Use with caution, as this can significantly change system behavior.*
-*   **Memory Viewer:** Accessible via `Settings > Cognitive Memory`, this tool lets you inspect the system's learned procedures and facts, or clear all memory.
-*   **Direct Answer:** The Planner agent can choose to respond directly to simple queries (e.g., "What is the capital of France?") without executing any system commands, making it function like a standard chatbot for straightforward questions.
-
----
-
-## Troubleshooting
-
-*   **"No suitable agents found."**: Ensure you have at least one User Agent configured in the left panel. Check that their descriptions are clear and relevant to the task.
-*   **Task hangs or takes too long**: Use the "Stop Task" button in the Execution Log window. This often happens if an LLM call times out or a script enters an infinite loop.
-*   **LM Studio not working**: Double-check that:
-    1.  LM Studio is installed and running.
-    2.  A model is fully downloaded and loaded.
-    3.  The "Local Server" is started within LM Studio (it should show "Server running on 127.0.0.1:1234").
-    4.  The model ID in the code (`LMSTUDIO_MODEL_ID`) matches the one you have loaded, or is a valid placeholder.
-*   **OpenRouter API errors**: Verify your API key is correct and that you have an active internet connection. Check your OpenRouter account for rate limits or billing issues.
-*   **PyAutoGUI actions not working**: The system estimates screen coordinates from screenshots. If your screen resolution changes or the UI layout is dynamic, these coordinates can be wrong. This is a known limitation of the fallback strategy.
-*   **ChromaDB Errors**: If you encounter database errors, you can try clearing the memory via `Settings > Cognitive Memory > Clear ALL Memory`.
-
----
-
-## Important Notes & Limitations
-
-*   **Security Warning:** This application can execute arbitrary code and control your mouse and keyboard. **Only give it tasks you trust.** Never run it with elevated privileges unless absolutely necessary. Treat it like a powerful, but potentially mischievous, intern.
-*   **Beta Software:** This is a complex prototype. It may contain bugs, produce unexpected results, or fail to complete tasks.
-*   **LLM Hallucinations:** The system relies on LLMs, which can generate incorrect or nonsensical code and plans. The verification system mitigates this but doesn't eliminate it.
-*   **Resource Intensive:** Running local models or complex tasks can consume significant CPU, GPU, and memory resources.
-*   **UI Automation is Fragile:** Automating graphical user interfaces (GUIs) via `pyautogui` is inherently brittle. It relies on static screen coordinates and can break if windows move, applications update, or screen resolutions change.
-*   **API Keys in Code:** Storing the OpenRouter API key directly in the source code is **not secure** for production or shared environments. For better security, consider loading it from an environment variable.
-
----
-
-## License
-
-This project is licensed under the MIT License. See the `LICENSE` file for details.
-```
+*   **Security:** This application gives AI agents the ability to execute code and control your computer. Only run tasks from trusted sources and be aware of the commands being executed. The user is responsible for the actions taken by the agents.
+*   **API Costs:** Using the OpenRouter API will incur costs based on your usage of their models. Monitor your usage and set spending limits on your OpenRouter account.
