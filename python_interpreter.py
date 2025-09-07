@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+from dotenv import load_dotenv
 from pathlib import Path
 from tkinter import (END, DISABLED, NORMAL, Button, Entry, Frame, Label,
                      Listbox, Menu, Spinbox, Toplevel, scrolledtext,
@@ -28,7 +29,7 @@ from PIL import Image, ImageGrab, ImageTk
 # --- Global Configuration ---
 # Note: Storing API keys directly in code is not recommended for production.
 # Consider using environment variables or a secure configuration file.
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 API_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_API_ENDPOINT = f"{API_BASE_URL}/chat/completions"  # Changed from API_ENDPOINT
 HTTP_REFERER = "http://localhost"
