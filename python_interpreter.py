@@ -28,7 +28,7 @@ from PIL import Image, ImageGrab, ImageTk
 # --- Global Configuration ---
 # Note: Storing API keys directly in code is not recommended for production.
 # Consider using environment variables or a secure configuration file.
-OPENROUTER_API_KEY = "skxxxxxxxx"
+OPENROUTER_API_KEY = "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"
 API_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_API_ENDPOINT = f"{API_BASE_URL}/chat/completions"  # Changed from API_ENDPOINT
 HTTP_REFERER = "http://localhost"
@@ -36,6 +36,7 @@ SITE_TITLE = "AGI-like Orchestrator"
 DATA_DIR = Path("data")
 AGENTS_FILE = DATA_DIR / "agents.json"
 CORE_AGENTS_CONFIG_FILE = DATA_DIR / "core_agents_config.json"
+LLM_IDS_FILE = DATA_DIR / "llm_ids.json"
 MEMORY_DIR = DATA_DIR / "memory"
 LMSTUDIO_API_BASE_URL = "http://127.0.0.1:1234/v1"
 LMSTUDIO_API_ENDPOINT = f"{LMSTUDIO_API_BASE_URL}/chat/completions"
@@ -50,6 +51,8 @@ class ConfigManager:
         MEMORY_DIR.mkdir(exist_ok=True)
         self.initialize_user_agents()
         self.initialize_core_agents_config()
+        # FIX: Ensure the LLM IDs file is created on startup if it doesn't exist.
+        self.initialize_llm_ids()
 
     def initialize_user_agents(self):
         if not AGENTS_FILE.exists():
@@ -64,6 +67,26 @@ class ConfigManager:
                  "system_prompt": "You are a world-class research assistant. Find the most accurate and relevant information to answer the user's query."},
             ]
             self.save_json(AGENTS_FILE, default_agents)
+
+    def initialize_llm_ids(self):
+        if not LLM_IDS_FILE.exists():
+            default_ids = [
+                "openrouter/sonoma-dusk-alpha",
+                "openrouter/sonoma-sky-alpha",
+                "deepseek/deepseek-chat-v3.1:free",
+                "openai/gpt-oss-120b:free",
+                "openai/gpt-oss-20b:free",
+                "z-ai/glm-4.5-air:free",
+                "qwen/qwen3-coder:free",
+                "moonshotai/kimi-k2:free",
+                "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+                "tngtech/deepseek-r1t2-chimera:free",
+                "mistralai/mistral-small-3.2-24b-instruct:free",
+                "moonshotai/kimi-dev-72b:free",
+                "deepseek/deepseek-r1-0528:free",
+                "microsoft/mai-ds-r1:free"
+            ]
+            self.save_json(LLM_IDS_FILE, default_ids)
 
     def initialize_core_agents_config(self):
         if not CORE_AGENTS_CONFIG_FILE.exists():
@@ -183,6 +206,8 @@ Respond ONLY with a valid JSON object containing a list of strings. Example:
     def save_user_agents(self, agents): self.save_json(AGENTS_FILE, agents)
     def load_core_agents_config(self): return self.load_json(CORE_AGENTS_CONFIG_FILE)
     def save_core_agents_config(self, config): self.save_json(CORE_AGENTS_CONFIG_FILE, config)
+    def load_llm_ids(self): return self.load_json(LLM_IDS_FILE, [])
+    def save_llm_ids(self, ids): self.save_json(LLM_IDS_FILE, ids)
 
 class MemoryManager:
     """Handles the agent's long-term memory using ChromaDB and file storage."""
@@ -821,6 +846,33 @@ class AgentManager:
         """A dedicated log method for the AgentManager."""
         self.log_callback(message, tag)
 
+    def update_all_llm_ids(self, new_llm_id):
+        """Iterates through all core and user agents and updates their LLM ID."""
+        self.log(f"[Manager] Updating all agents to use LLM ID: {new_llm_id}", "header")
+        
+        try:
+            # Update Core Agents
+            core_config = self.config_manager.load_core_agents_config()
+            for agent_name, agent_data in core_config.items():
+                if "llm_id" in agent_data:
+                    agent_data["llm_id"] = new_llm_id
+            self.config_manager.save_core_agents_config(core_config)
+            self.log("[Manager] Core agent configurations updated.", "success")
+
+            # Update User Agents
+            user_agents = self.config_manager.load_user_agents()
+            for agent_data in user_agents:
+                agent_data["llm_id"] = new_llm_id
+            self.config_manager.save_user_agents(user_agents)
+            self.log("[Manager] User agent configurations updated.", "success")
+            
+            # Finally, reload the agents in the current session to apply changes immediately
+            self.reload_agents()
+            return True
+        except Exception as e:
+            self.log(f"[Manager] Failed to update LLM IDs: {e}", "error")
+            return False
+
     def reload_agents(self):
         self.user_agents_data = self.config_manager.load_user_agents()
         self.core_agents_config = self.config_manager.load_core_agents_config()
@@ -1011,13 +1063,18 @@ class TaskExecutorGUI:
         self.is_task_running = False
         self.log_photo_images = []
         self.execution_log_window = None
-        self.full_task_log = [] # To store the log for post-task review
+        self.full_task_log = [] 
 
         self.log_queue = queue.Queue()
         self.question_queue = queue.Queue()
         self.answer_queue = queue.Queue()
         self.input_request_queue = queue.Queue()
         self.input_response_queue = queue.Queue()
+        self.provider_var = tk.StringVar(value="openrouter")
+        self.mode_var = tk.StringVar(value="execute")
+        # FIX: Initialize llm_id_var before it is used in create_widgets()
+        self.llm_id_var = tk.StringVar() 
+
         self.agent_manager = AgentManager(
             self.root, 
             self.log_to_gui, 
@@ -1027,10 +1084,10 @@ class TaskExecutorGUI:
             self.input_request_queue,
             self.input_response_queue
         )
-        self.provider_var = tk.StringVar(value="openrouter")
-
+        
         self.create_widgets()
         self.populate_agent_list()
+        self.populate_llm_id_dropdown()
         self.process_log_queue()
 
     def create_widgets(self):
@@ -1102,26 +1159,76 @@ class TaskExecutorGUI:
 
     def create_controls_widgets(self, parent):
         self.execute_button = ttk.Button(parent, text="Execute Task", command=self.start_task, style="Primary.TButton")
-        self.execute_button.pack(fill="x")
-        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill="x", pady=10)
+        self.execute_button.pack(fill="x", pady=(0, 5))
+    
+        llm_frame = ttk.LabelFrame(parent, text="Global LLM Settings")
+        llm_frame.pack(fill="x", pady=5)
+        
+        self.llm_id_combobox = ttk.Combobox(llm_frame, textvariable=self.llm_id_var, state="readonly")
+        self.llm_id_combobox.pack(fill="x", expand=True, side="left", padx=(0, 5))
+        
+        apply_button = ttk.Button(llm_frame, text="Apply to All", command=self.apply_global_llm_id)
+        apply_button.pack(side="left", padx=(0, 5))
+        
+        manage_button = ttk.Button(llm_frame, text="Manage List", command=self.open_llm_manager_dialog)
+        manage_button.pack(side="left")
+        mode_frame = ttk.LabelFrame(parent, text="Execution Mode")
+        mode_frame.pack(fill="x", pady=5)
+        ttk.Radiobutton(mode_frame, text="Execute Task", variable=self.mode_var, value="execute", command=self._update_control_state).pack(side="left", padx=10, pady=5)
+        ttk.Radiobutton(mode_frame, text="Chat", variable=self.mode_var, value="chat", command=self._update_control_state).pack(side="left", padx=10, pady=5)
+    
         provider_frame = ttk.LabelFrame(parent, text="LLM Provider")
-        provider_frame.pack(fill="x", pady=(0, 10))
+        provider_frame.pack(fill="x", pady=5)
         ttk.Radiobutton(provider_frame, text="OpenRouter", variable=self.provider_var, value="openrouter").pack(side="left", padx=10, pady=5)
         ttk.Radiobutton(provider_frame, text="LM Studio", variable=self.provider_var, value="lmstudio").pack(side="left", padx=10, pady=5)
-        ttk.Label(parent, text="Active Agents:").pack(anchor="w")
+        
+        active_agents_frame = ttk.LabelFrame(parent, text="Task Settings")
+        active_agents_frame.pack(fill="x", pady=5)
+        ttk.Label(active_agents_frame, text="Active Agents:").pack(anchor="w")
         self.num_agents_var = tk.IntVar(value=1)
-        self.num_agents_spinbox = ttk.Spinbox(parent, from_=1, to=1, width=5, textvariable=self.num_agents_var, state=DISABLED, style="TSpinbox"); self.num_agents_spinbox.pack(fill="x")
-        self.max_tokens_label = ttk.Label(parent, text="Max Tokens: 10000"); self.max_tokens_label.pack(anchor="w", pady=(10, 0))
+        self.num_agents_spinbox = ttk.Spinbox(active_agents_frame, from_=1, to=1, width=5, textvariable=self.num_agents_var, state=DISABLED, style="TSpinbox"); self.num_agents_spinbox.pack(fill="x")
+        self.max_tokens_label = ttk.Label(active_agents_frame, text="Max Tokens: 10000"); self.max_tokens_label.pack(anchor="w", pady=(10, 0))
         self.max_tokens_var = tk.IntVar(value=10000)
-        self.max_tokens_slider = ttk.Scale(parent, from_=256, to=100000, variable=self.max_tokens_var, orient=tk.HORIZONTAL, command=self.update_max_tokens_label); self.max_tokens_slider.pack(fill="x")
+        self.max_tokens_slider = ttk.Scale(active_agents_frame, from_=256, to=100000, variable=self.max_tokens_var, orient=tk.HORIZONTAL, command=self.update_max_tokens_label); self.max_tokens_slider.pack(fill="x")
+    
+        self._update_control_state()
+
+    def populate_llm_id_dropdown(self):
+        """Loads the list of LLM IDs and populates the combobox."""
+        ids = self.agent_manager.config_manager.load_llm_ids()
+        self.llm_id_combobox['values'] = ids
+        if ids:
+            self.llm_id_var.set(ids[0])
+    
+    def apply_global_llm_id(self):
+        """Applies the selected LLM ID to all agent configurations."""
+        selected_id = self.llm_id_var.get()
+        if not selected_id:
+            messagebox.showwarning("No Selection", "Please select an LLM ID from the list.", parent=self.root)
+            return
+    
+        if messagebox.askyesno("Confirm Update", f"This will overwrite the LLM ID for ALL core and user agents with:\n\n'{selected_id}'\n\nAre you sure you want to proceed?", parent=self.root):
+            if self.agent_manager.update_all_llm_ids(selected_id):
+                messagebox.showinfo("Success", "All agent LLM IDs have been updated.", parent=self.root)
+                # Refresh the description panel if an agent is selected
+                self.on_agent_select(None) 
+            else:
+                messagebox.showerror("Error", "An error occurred while updating the configurations. Check the log for details.", parent=self.root)
+    
+    def open_llm_manager_dialog(self):
+        """Opens the dialog to manage the list of LLM IDs."""
+        # The dialog will be modal, so the code waits here until it's closed.
+        LLMManagerDialog(self.root, self.agent_manager.config_manager)
+        # After the dialog is closed, refresh the dropdown to reflect any changes.
+        self.populate_llm_id_dropdown()
 
     def start_task(self):
         prompt = self.prompt_text.get("1.0", END).strip()
         if not prompt or self.is_task_running: return
+        
         provider = self.provider_var.get()
         if provider == "lmstudio":
-            # Remind user to have LM Studio running
-            if not messagebox.askokcancel("LM Studio Check", "You have selected LM Studio as the provider.\n\nPlease ensure the LM Studio server is running and a model is fully loaded before continuing.", parent=self.root):
+            if not messagebox.askokcancel("LM Studio Check", "Please ensure the LM Studio server is running and a model is loaded.", parent=self.root):
                 return
         
         self.is_task_running = True
@@ -1129,40 +1236,70 @@ class TaskExecutorGUI:
         self.log_photo_images.clear()
         self.full_task_log.clear()
 
-        # Clear previous results
         for widget in [self.answer_text, self.log_review_text]:
             widget.config(state=NORMAL); widget.delete("1.0", END); widget.config(state=DISABLED)
         
-        # Create log window and hide main window
+        self.prompt_text.delete("1.0", END)
+
+        if self.mode_var.get() == "chat":
+            self._start_chat_task(prompt, provider)
+        else: # execute mode
+            self._start_agent_task(prompt, provider)
+
+
+    def _start_agent_task(self, prompt, provider):
+        """Handles the logic for the 'Execute Task' mode."""
         self.execution_log_window = ExecutionLogWindow(self.root, self.cancel_task)
         self.setup_text_tags(self.execution_log_window.log_text)
         self.root.withdraw()
         
-        self.prompt_text.delete("1.0", END)
-        
-        threading.Thread(target=self.agent_manager.execute_task, args=(prompt, self.num_agents_var.get(), self.max_tokens_var.get(), provider), daemon=True).start()
+        threading.Thread(
+            target=self.agent_manager.execute_task, 
+            args=(prompt, self.num_agents_var.get(), self.max_tokens_var.get(), provider), 
+            daemon=True
+        ).start()
+
+    def _start_chat_task(self, prompt, provider):
+        """Handles the logic for the 'Chat' mode."""
+        # Prepare the answer area for live streaming
+        self.answer_text.config(state=NORMAL)
+        self.answer_text.delete("1.0", END)
+        self.output_notebook.select(0)
+
+        # Run the chat query in a background thread
+        threading.Thread(
+            target=self._chat_thread, 
+            args=(prompt, provider), 
+            daemon=True
+        ).start()
+
+    def _chat_thread(self, prompt, provider):
+        chat_model = self.agent_manager.core_agents_config.get("PLANNER", {}).get("llm_id", "openrouter/sonoma-sky-alpha")
+        messages = [
+            {"role": "system", "content": "You are a helpful AI assistant."},
+            {"role": "user", "content": prompt}
+        ]
+        query_llm(messages, chat_model, self.log_to_gui, threading.Event(), provider)
+        self.on_task_finish({"final_answer": "[STREAM COMPLETE]"})
 
     def on_task_finish(self, result):
         self.root.after(0, self._on_task_finish_ui, result)
         
     def _on_task_finish_ui(self, result):
-        # Don't close the log window yet - just update button state
-        if self.execution_log_window:
-            # Change the button text to indicate completion
+        if self.execution_log_window and self.execution_log_window.winfo_exists():
+            self.execution_log_window.is_task_running = False
             for widget in self.execution_log_window.winfo_children():
-                if isinstance(widget, ttk.Button) and widget['text'] == "Stop Task":
-                    widget.config(text="Close", style="TButton")
-                    widget.config(command=self.close_execution_log)  # <-- This line is the problem
+                if isinstance(widget, ttk.Button) and "Stop" in widget['text']:
+                    widget.config(text="Close", style="TButton", command=self.close_execution_log)
                     break
-        
-        # Display final answer
-        final_answer = result.get("final_answer", "Task finished with no conclusive answer.")
-        self.answer_text.config(state=NORMAL)
-        self.answer_text.delete("1.0", END)
-        self.answer_text.insert(END, final_answer)
+        if self.mode_var.get() == "execute":
+            final_answer = result.get("final_answer", "Task finished with no conclusive answer.")
+            self.answer_text.config(state=NORMAL)
+            self.answer_text.delete("1.0", END)
+            self.answer_text.insert(END, final_answer)
+
         self.answer_text.config(state=DISABLED)
-        
-        # Display full log for review
+
         self.log_review_text.config(state=NORMAL)
         self.log_review_text.delete("1.0", END)
         for item, tag in self.full_task_log:
@@ -1172,15 +1309,16 @@ class TaskExecutorGUI:
         self.is_task_running = False
         self.set_ui_state(running=False)
         
-        # Log completion message
-        self.log_to_gui("\n[TASK COMPLETE] You can now close this window.", "success")
+        if self.execution_log_window and self.execution_log_window.winfo_exists():
+            self.log_to_gui("\n[TASK COMPLETE] You can now close this window.", "success")
+        
+        self.output_notebook.select(0)
 
     def cancel_task(self):
         if not self.is_task_running: return
         self.agent_manager.cancel_task()
 
     def close_execution_log(self):
-        """Close the execution log window and return to main window."""
         if self.execution_log_window and self.execution_log_window.winfo_exists():
             self.execution_log_window.destroy()
             self.execution_log_window = None
@@ -1194,31 +1332,60 @@ class TaskExecutorGUI:
         self.execute_button.config(state=state)
         for widget in [self.add_button, self.edit_button, self.remove_button, self.max_tokens_slider]:
             widget.config(state=state)
-        self.num_agents_spinbox.config(state='readonly' if not running and self.agent_listbox.size() > 0 else DISABLED)
+
+        if not running:
+            self._update_control_state()
+        else:
+            self.num_agents_spinbox.config(state=DISABLED)
+
+    def _update_control_state(self):
+        if self.mode_var.get() == "chat":
+            self.execute_button.config(text="Send Message")
+            self.num_agents_spinbox.config(state=DISABLED)
+        else: # execute mode
+            self.execute_button.config(text="Execute Task")
+            if self.agent_listbox.size() > 0:
+                 self.num_agents_spinbox.config(state="readonly")
+            else:
+                 self.num_agents_spinbox.config(state=DISABLED)
 
     def process_log_queue(self):
         try:
-            widget_to_update = None
-            if self.execution_log_window and self.execution_log_window.winfo_exists():
-                widget_to_update = self.execution_log_window.log_text
+            items_processed = False
+            # Determine target widgets based on the current mode
+            log_widget = self.execution_log_window.log_text if self.execution_log_window and self.execution_log_window.winfo_exists() else None
+            chat_widget = self.answer_text if self.mode_var.get() == "chat" else None
 
-            if not self.log_queue.empty() and widget_to_update:
-                widget_to_update.config(state=NORMAL)
-                # Process all items currently in the queue in one go
-                while not self.log_queue.empty():
-                    item, tag = self.log_queue.get_nowait()
-                    self.full_task_log.append((item, tag))
-                    
-                    if tag == "system_command":
-                        if item == "HIDE_WINDOWS_FOR_SCREENSHOT": 
-                            self.hide_windows_for_screenshot()
-                        elif item == "SHOW_WINDOWS_AFTER_SCREENSHOT": 
-                            self.show_windows_after_screenshot()
-                        continue
-                    self.log_item_to_widget(widget_to_update, item, tag)
+            if not self.log_queue.empty():
+                # If there are items, ensure the correct target widgets are enabled
+                if log_widget: log_widget.config(state=NORMAL)
+                if chat_widget: chat_widget.config(state=NORMAL)
+                items_processed = True
+
+            # Process all items currently in the queue
+            while not self.log_queue.empty():
+                item, tag = self.log_queue.get_nowait()
+                self.full_task_log.append((item, tag)) # Always save to the full log
+
+                is_stream = tag and "llm_stream" in tag
                 
-                widget_to_update.see(END) # Scroll to the end once per batch
-                widget_to_update.config(state=DISABLED)
+                if chat_widget and is_stream:
+                    # If in chat mode and it's a stream, send to the chat widget
+                    self.log_item_to_widget(chat_widget, item, tag)
+                elif log_widget:
+                    # Otherwise, send to the execution log widget if it exists
+                    if tag == "system_command":
+                        if item == "HIDE_WINDOWS_FOR_SCREENSHOT": self.hide_windows_for_screenshot()
+                        elif item == "SHOW_WINDOWS_AFTER_SCREENSHOT": self.show_windows_after_screenshot()
+                    else:
+                        self.log_item_to_widget(log_widget, item, tag)
+
+            if items_processed:
+                # After processing the batch, scroll to the end
+                if log_widget: log_widget.see(END)
+                if chat_widget: chat_widget.see(END)
+                # We leave the widgets enabled to allow for the next batch of streaming tokens.
+                # They will be disabled by `on_task_finish`.
 
             while not self.question_queue.empty():
                 question = self.question_queue.get_nowait()
@@ -1346,7 +1513,93 @@ class TaskExecutorGUI:
             self.agent_manager.config_manager.save_user_agents(self.agent_manager.user_agents_data)
             self.populate_agent_list()
 
-# --- Utility & Settings Dialogs (Unchanged) ---
+class LLMManagerDialog(Toplevel):
+    """A Toplevel window for adding/removing LLM IDs from the global list."""
+    def __init__(self, parent, config_manager):
+        super().__init__(parent)
+        self.config_manager = config_manager
+        self.style_manager = StyleManager()
+
+        self.title("Manage LLM ID List")
+        self.geometry("600x400")
+        self.configure(bg=self.style_manager.colors['bg'])
+        self.transient(parent)
+        self.grab_set()
+
+        # --- Widgets ---
+        list_frame = ttk.LabelFrame(self, text="Available LLM IDs", padding=10)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.listbox = Listbox(list_frame, **self.style_manager.get_widget_styles("listbox"))
+        self.listbox.pack(fill="both", expand=True, side="left")
+
+        # Add a scrollbar
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.listbox.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.listbox.config(yscrollcommand=scrollbar.set)
+        
+        # --- Entry and Add/Remove Buttons ---
+        entry_frame = ttk.LabelFrame(self, text="Modify List", padding=10)
+        entry_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+        self.new_id_entry = ttk.Entry(entry_frame)
+        self.new_id_entry.pack(fill="x", expand=True, side="left", padx=(0, 10))
+        
+        add_button = ttk.Button(entry_frame, text="Add", command=self.add_id)
+        add_button.pack(side="left", padx=(0, 10))
+        
+        remove_button = ttk.Button(entry_frame, text="Remove Selected", command=self.remove_id, style="Destructive.TButton")
+        remove_button.pack(side="left")
+
+        # --- Save/Cancel Buttons ---
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill="x", padx=10, pady=10)
+        
+        save_button = ttk.Button(btn_frame, text="Save and Close", command=self.save_and_close, style="Primary.TButton")
+        save_button.pack(side="right")
+        cancel_button = ttk.Button(btn_frame, text="Cancel", command=self.destroy)
+        cancel_button.pack(side="right", padx=10)
+
+        self.load_ids()
+
+    def load_ids(self):
+        self.listbox.delete(0, END)
+        ids = self.config_manager.load_llm_ids()
+        for llm_id in sorted(ids):
+            self.listbox.insert(END, llm_id)
+
+    def add_id(self):
+        new_id = self.new_id_entry.get().strip()
+        if not new_id:
+            messagebox.showwarning("Input Error", "LLM ID cannot be empty.", parent=self)
+            return
+        
+        current_ids = self.listbox.get(0, END)
+        if new_id in current_ids:
+            messagebox.showwarning("Duplicate Error", "This LLM ID is already in the list.", parent=self)
+            return
+
+        self.listbox.insert(END, new_id)
+        self.new_id_entry.delete(0, END)
+
+    def remove_id(self):
+        selections = self.listbox.curselection()
+        if not selections:
+            messagebox.showwarning("Selection Error", "Please select an LLM ID to remove.", parent=self)
+            return
+        
+        # We delete from the bottom up to avoid index shifting issues
+        for index in reversed(selections):
+            self.listbox.delete(index)
+
+    def save_and_close(self):
+        updated_ids = list(self.listbox.get(0, END))
+        try:
+            self.config_manager.save_llm_ids(updated_ids)
+            self.destroy()
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Could not save the LLM ID list: {e}", parent=self)
+
 class AgentDialog(simpledialog.Dialog):
     def __init__(self, parent, title, agent_data=None): self.agent_data = agent_data or {}; super().__init__(parent, title)
     def body(self, master):
