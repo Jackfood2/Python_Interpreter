@@ -28,7 +28,7 @@ from PIL import Image, ImageGrab, ImageTk
 # --- Global Configuration ---
 # Note: Storing API keys directly in code is not recommended for production.
 # Consider using environment variables or a secure configuration file.
-OPENROUTER_API_KEY = "skxxxxxxxxxxxxxxxxxxxxxxx"
+OPENROUTER_API_KEY = "skxxxxxxxx"
 API_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_API_ENDPOINT = f"{API_BASE_URL}/chat/completions"  # Changed from API_ENDPOINT
 HTTP_REFERER = "http://localhost"
@@ -441,7 +441,7 @@ def query_llm(messages, model_id, log_callback, cancel_event, provider, max_toke
             log_callback("\n[LLM] Task cancelled before request.", "warning")
             return None
         try:
-            with requests.post(url, headers=headers, json=data, timeout=10, stream=True) as resp:
+            with requests.post(url, headers=headers, json=data, timeout=300, stream=True) as resp:
                 resp.raise_for_status()
                 if resp.status_code != 200:
                     log_callback(f"[LLM] Unexpected status code: {resp.status_code}", "error")
@@ -483,7 +483,7 @@ def query_llm(messages, model_id, log_callback, cancel_event, provider, max_toke
     log_callback(f"\n[LLM ERROR on {provider.upper()}] Request failed after multiple timeouts.", "error")
     return None
 
-def query_vision_llm(prompt, base64_image, model_id, log_callback, cancel_event, provider, max_tokens=1024):
+def query_vision_llm(prompt, base64_image, model_id, log_callback, cancel_event, provider, max_tokens=2048):
     log_callback(f"\n[VisionLLM:{model_id} via {provider.upper()}] Querying with image...", "info")
     if cancel_event.is_set(): return None
 
@@ -508,6 +508,18 @@ def query_vision_llm(prompt, base64_image, model_id, log_callback, cancel_event,
         log_callback(f"\n[LLM ERROR] Could not parse vision model response.", "error")
     return None
 
+def _is_input_prompt(line: str) -> bool:
+    """A simple heuristic to detect if a line is a prompt for user input."""
+    l_line = line.lower().strip()
+    # Common keywords in prompts
+    prompt_keywords = ["enter", "input", "choose", "select", "y/n", "credential"]
+    if any(keyword in l_line for keyword in prompt_keywords):
+        return True
+    # Prompts often end with a colon, question mark, or bracket for input
+    if l_line.endswith(":") or l_line.endswith("?"):
+        return True
+    return False
+
 class Agent:
     def __init__(self, root, name, description, llm_id, system_prompt, log_callback, config_manager, memory_manager, question_queue, answer_queue, subprocess_list, input_request_queue, input_response_queue):
         self.root = root 
@@ -523,20 +535,38 @@ class Agent:
 
     def log(self, message, tag=None): self.log_callback(f"[{self.name}] {message}", tag)
     
-    # --- NEW HELPER METHOD ---
-    # This method runs in a separate thread to read a stream (like stdout)
-    # and puts the lines into a queue without blocking the main thread.
+
     def _stream_reader(self, pipe, output_queue, tag):
+        """
+        Reads a stream character-by-character to avoid blocking on prompts
+        that don't end with a newline. Assembles lines and puts them in a queue.
+        """
         try:
-            # "iter(pipe.readline, '')" reads lines one by one from the stream
-            # until the stream is closed.
-            for line in iter(pipe.readline, ''):
-                if line:
-                    output_queue.put((tag, line))
+            line_buffer = ""
+            # Use iter with a lambda to read one character at a time.
+            # This is the key to preventing the readline() deadlock.
+            for char in iter(lambda: pipe.read(1), ''):
+                if char:
+                    line_buffer += char
+                    # If we get a newline, we have a full line. Send it.
+                    if char == '\n':
+                        output_queue.put((tag, line_buffer))
+                        line_buffer = ""
+                    # HEURISTIC: If the buffered line ends with a common prompt
+                    # marker (a colon followed by a space), send it immediately
+                    # without waiting for a newline. This triggers the input pop-up.
+                    elif line_buffer.endswith(': ') or line_buffer.endswith('? '):
+                        output_queue.put((tag, line_buffer))
+                        line_buffer = ""
                 else:
+                    # The stream has closed.
                     break
+            
+            # After the loop, if there's anything left in the buffer (e.g.,
+            # a final line of output that didn't end with a newline), send it.
+            if line_buffer:
+                output_queue.put((tag, line_buffer))
         finally:
-            # Ensure the pipe is closed when done
             with contextlib.suppress(Exception):
                 pipe.close()
 
@@ -565,7 +595,6 @@ class Agent:
             except json.JSONDecodeError as e: self.log(f"Failed to parse plan: {e}\nResponse: {response}", "error")
         return None
 
-    # --- MODIFIED METHOD ---
     def execute_step(self, step_data):
         description, step_type, command = step_data.get("description", "N/A"), step_data.get("type"), step_data.get("command", "")
         self.log(f"Executing: {description}", "info")
@@ -580,7 +609,8 @@ class Agent:
                 script_path.write_text(script_content, encoding='utf-8')
 
                 proc = subprocess.Popen(
-                    [sys.executable, str(script_path)],
+                    [sys.executable, "-u", str(script_path)],
+                    stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -590,38 +620,60 @@ class Agent:
                 )
                 self.active_subprocesses.append(proc)
 
-                # --- START: Real-time logging logic ---
                 output_queue = queue.Queue()
                 stdout_full, stderr_full = "", ""
 
-                # Start reader threads for stdout and stderr
                 stdout_thread = threading.Thread(target=self._stream_reader, args=(proc.stdout, output_queue, "stdout"))
                 stderr_thread = threading.Thread(target=self._stream_reader, args=(proc.stderr, output_queue, "stderr"))
                 stdout_thread.start()
                 stderr_thread.start()
 
-                # Main loop to check process status and read from the queue
                 while proc.poll() is None:
                     try:
-                        # Get output from the queue without blocking
                         tag, line = output_queue.get_nowait()
                         if tag == "stdout":
                             clean_line = line.strip()
-                            self.log(clean_line, "output")
-                            stdout_full += line
+                            # --- LOGIC TO INTERCEPT INPUT PROMPTS ---
+                            if _is_input_prompt(clean_line):
+                                self.log(clean_line, "output") # Show the prompt in the log
+                                stdout_full += line
+                                
+                                # Use the existing queue system to request input from the GUI
+                                self.input_request_queue.put(clean_line)
+                                user_response = self.input_response_queue.get() # Blocks until GUI thread responds
+
+                                if user_response is not None and user_response.strip() != "":
+                                    # Feed the user's response back to the script
+                                    self.log(f"User > {user_response}", "success")
+                                    try:
+                                        proc.stdin.write(user_response + '\n')
+                                        proc.stdin.flush()
+                                        # --- THE FIX ---
+                                        # Close stdin to signal EOF for scripts using sys.stdin.read()
+                                        proc.stdin.close()
+                                    except (IOError, BrokenPipeError):
+                                        # This can happen if the script exits immediately after input. Safe to ignore.
+                                        self.log("Could not write to script's stdin (it might have already finished).", "warning")
+                                else:
+                                    # User cancelled the dialog or entered nothing
+                                    self.log("User cancelled input. Terminating script.", "error")
+                                    proc.kill() # Terminate the subprocess
+                                    stderr_full += "\n[Execution Error] User cancelled the input prompt."
+                                    break # Exit the monitoring loop
+                            else:
+                                # Regular output line
+                                self.log(clean_line, "output")
+                                stdout_full += line
                         else: # stderr
                             clean_line = line.strip()
                             self.log(f"[STDERR]: {clean_line}", "error")
                             stderr_full += line
                     except queue.Empty:
-                        # If the queue is empty, sleep briefly to prevent high CPU usage
                         time.sleep(0.05)
                 
-                # Wait for reader threads to finish to ensure all output is captured
                 stdout_thread.join(timeout=1)
                 stderr_thread.join(timeout=1)
 
-                # Process any final items that might be left in the queue
                 while not output_queue.empty():
                     tag, line = output_queue.get()
                     if tag == "stdout":
@@ -630,7 +682,6 @@ class Agent:
                     else:
                         self.log(f"[STDERR]: {line.strip()}", "error")
                         stderr_full += line
-                # --- END: Real-time logging logic ---
 
                 if proc in self.active_subprocesses: self.active_subprocesses.remove(proc)
                 try: os.remove(script_path)
@@ -641,8 +692,6 @@ class Agent:
             elif step_type in ["cmd", "powershell"]:
                 is_shell = True if step_type == "cmd" else False
                 cmd_list = ['powershell.exe', '-NoProfile', '-Command', command] if step_type == "powershell" else command
-                # Note: Real-time output for cmd/powershell is more complex and not implemented here
-                # as python_script is the primary method for long-running tasks.
                 proc = subprocess.Popen(cmd_list, shell=is_shell, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore', creationflags=flags)
                 try:
                     stdout, stderr = proc.communicate(timeout=300)
@@ -653,7 +702,6 @@ class Agent:
                     stderr += "\n[Execution Error] Command timed out after 5 minutes and was terminated."
                     return {"stdout": stdout, "stderr": stderr, "code": 1}
 
-            # --- (The rest of the execute_step method is unchanged) ---
             elif step_type == "screenshot":
                 self.log_callback("HIDE_WINDOWS_FOR_SCREENSHOT", "system_command")
                 time.sleep(1.5)
@@ -1509,4 +1557,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = TaskExecutorGUI(root)
     root.mainloop()
-
